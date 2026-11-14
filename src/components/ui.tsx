@@ -27,9 +27,9 @@ export function NumInput({ value, onChange, id, label, scale = 1 }: {
 const round = (n: number) => Math.round(n * 1e4) / 1e4;
 
 /** ช่องตัวเลขพร้อมป้ายกำกับและหน่วย; units หลายหน่วยกดสลับได้ (เช่น กก. ↔ กระสอบ) */
-export function Num({ label, value, onChange, unit, units, hint }: {
+export function Num({ label, value, onChange, unit, units, hint, warn }: {
   label: string; value: number; onChange: (n: number) => void; unit?: string;
-  units?: { label: string; scale: number }[]; hint?: string;
+  units?: { label: string; scale: number }[]; hint?: string; warn?: string | null;
 }) {
   const id = useId();
   const [ui, setUi] = useState(0);
@@ -43,7 +43,7 @@ export function Num({ label, value, onChange, unit, units, hint }: {
           <button type="button" className="unit unit-toggle" title="กดเพื่อเปลี่ยนหน่วย" onClick={() => setUi((ui + 1) % units.length)}>{u!.label}</button>
         ) : unit ? <span className="unit">{unit}</span> : null}
       </div>
-      {hint && <p className="hint">{hint}</p>}
+      {warn ? <p className="hint" role="alert" style={{ color: "var(--ember)", fontWeight: 600 }}>{warn}</p> : hint && <p className="hint">{hint}</p>}
     </div>
   );
 }

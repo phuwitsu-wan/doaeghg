@@ -39,13 +39,21 @@ export interface MachineUse {
   lph: number; // ลิตร/ชม. (แก้ไขได้)
   liters: number; // ลิตร (รวมทั้งแปลง) เมื่อ mode = liters
   kwh: number; // kWh (รวมทั้งแปลง) เมื่อ fuel = electric
-  hp?: number; // แรงม้า (รถแทรกเตอร์)
+  hp?: number; // แรงม้า (รถแทรกเตอร์และเครื่องที่ติดแทรกเตอร์)
+  label?: string; // ชื่อเครื่องจักรตามรายการของพืช เช่น "รถคีบอ้อย"
 }
 export interface TransportUse {
   id: string;
   desc: string;
   fuel: TransportKey;
-  amount: number; // ลิตร หรือ กก. รวม
+  amount: number; // ลิตร หรือ กก. รวม (เมื่อ mode = fuel)
+  /** distance: คิดจากระยะทาง ÷ อัตราสิ้นเปลือง (กม./ลิตร) */
+  mode?: "fuel" | "distance";
+  vehicle?: string; // รหัสชนิดรถ (pickup, truck6, truck10, truck18)
+  km?: number; // ระยะทางเที่ยวเดียว
+  trips?: number; // จำนวนเที่ยว
+  kmPerL?: number; // อัตราสิ้นเปลือง กม./ลิตร
+  roundTrip?: boolean; // คิดเที่ยวกลับด้วย
 }
 
 /** ข้อมูลกิจกรรมของ 1 กรณี (กรณีฐาน หรือ กรณีดำเนินโครงการ) */
@@ -56,6 +64,7 @@ export interface Scenario {
     harvestedAreaRai: number;
     days: number;
     waterRegime: SFwKey;
+    plantMethod?: string; // วิธีปลูกข้าว: transplant, machineTransplant, wetBroadcast, dryBroadcast, drone
     preSeason: SFpKey;
     organics: RiceOrganic[];
   };

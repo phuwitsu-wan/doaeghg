@@ -1,8 +1,9 @@
 import type { Evaluation } from "./engine/evaluate";
 import { CFOA, FUELS, MACHINES, ORGANIC_FERTS, RESIDUES, SF_P, SF_W, TRANSPORT_FUELS } from "./engine/factors";
-import { elecEF, gwp } from "./engine/calc";
+import { elecEF, gwp, transportLiters } from "./engine/calc";
+import { RICE_PLANT_METHODS, VEHICLES } from "./machines";
 import { CROP_GROUPS, type FieldRecord, type Scenario, type ScenarioResult, type Settings } from "./engine/types";
-import { assess, LEVEL_TEXT } from "./benchmark";
+import { assess, LEVEL_RULE, LEVEL_TEXT, levelSentence, ratioText } from "./benchmark";
 import { EVENT_TEXT, type Profile, type UsageEvent } from "./profile";
 import { buildXlsx, downloadBytes, type Cell, type RowStyle, type Sheet } from "./xlsx";
 
@@ -32,10 +33,13 @@ function activityRows(s: Scenario, rice: boolean): Cell[][] {
   if (s.dolomiteKgPerRai) rows.push(["โดโลไมต์ (กก./ไร่)", s.dolomiteKgPerRai]);
   rows.push([`เศษพืช: ${RESIDUES[s.residue.type]?.label ?? ""} (กก./ไร่)`, s.residue.kgPerRai], ["นำออกจากแปลง (%)", s.residue.removedPct], ["พื้นที่เผา (ไร่)", s.residue.burnedAreaRai]);
   s.machines.forEach((m) => rows.push([
-    `${m.stage}: ${MACHINES[m.machine]?.label}${m.hp ? ` ${m.hp} แรงม้า` : ""} (${m.fuel === "electric" ? "ไฟฟ้า" : FUELS[m.fuel]?.label})`,
+    `${m.stage}: ${m.label ?? MACHINES[m.machine]?.label}${m.hp ? ` ${m.hp} แรงม้า` : ""} (${m.fuel === "electric" ? "ไฟฟ้า" : FUELS[m.fuel]?.label})`,
     m.fuel === "electric" ? `${m.kwh} kWh` : m.mode === "liters" ? `${m.liters} ลิตร` : `${m.hoursPerRai} ชม./ไร่ × ${m.times} ครั้ง × ${m.lph} ลิตร/ชม.`,
   ]));
-  s.transports.forEach((t) => rows.push([`ขนส่ง: ${t.desc || "-"}`, `${t.amount} (${TRANSPORT_FUELS[t.fuel]?.label})`]));
+  s.transports.forEach((t) => rows.push(t.mode === "distance"
+    ? [`ขนส่ง: ${VEHICLES.find((v) => v.id === t.vehicle)?.label ?? "รถ"} ${t.desc || ""}`, `${t.km} กม. × ${t.roundTrip === false ? 1 : 2} × ${t.trips} เที่ยว ÷ ${t.kmPerL} กม./ลิตร = ${r2(transportLiters(t))} ลิตรดีเซล`]
+    : [`ขนส่ง: ${t.desc || "-"}`, `${t.amount} (${TRANSPORT_FUELS[t.fuel]?.label})`]));
+  if (rice && s.rice.plantMethod) rows.push(["วิธีปลูก", RICE_PLANT_METHODS.find((m) => m.key === s.rice.plantMethod)?.label ?? s.rice.plantMethod]);
   return rows;
 }
 
@@ -61,7 +65,7 @@ export function exportXlsx(items: { rec: FieldRecord; ev: Evaluation }[], settin
       rec.standard === "tver" ? "T-VER" : "MRV", rec.baseline.areaRai, r2(ev.baseline.totalKgCO2e), ev.project ? r2(ev.project.totalKgCO2e) : null,
       ev.trees ? r2(ev.trees.removalKgCO2) : null, ev.reductionKgCO2e != null ? r2(ev.reductionKgCO2e) : null, ev.tver ? r2(ev.tver.creditKgCO2e) : null,
       r2(ev.baseline.perRai), ev.baseline.perKgProduct != null ? r2(ev.baseline.perKgProduct, 4) : null,
-      a ? `${LEVEL_TEXT[a.level].title} (${r2(a.ratio * 100, 0)}% ของ ${a.ref})` : "-"]);
+      a ? `${LEVEL_TEXT[a.level].title} (${ratioText(a.ratio)} ${a.ref})` : "-"]);
   }
   sheets.push(sum.done());
 
@@ -77,7 +81,11 @@ export function exportXlsx(items: { rec: FieldRecord; ev: Evaluation }[], settin
     b.add(["GWP", `${settings.gwp}: CH4 ${G.CH4}, N2O ${G.N2O}`]);
     b.add(["EF ไฟฟ้า (kgCO2e/kWh)", elecEF(settings)]);
     const a = assess(rec, ev, settings);
-    if (a) b.add(["เทียบค่าอ้างอิง", `${LEVEL_TEXT[a.level].title}: ${r2(a.value, 3)} เทียบ ${a.ref} kgCO2e/กก.${a.product} (${a.source})`], "bold");
+    if (a) {
+      b.add(["เทียบค่าอ้างอิง", `${LEVEL_TEXT[a.level].title} (เกณฑ์: ${LEVEL_RULE[a.level]})`], "bold");
+      b.add(["", levelSentence(a)]);
+      b.add(["ที่มาค่าอ้างอิง", a.source]);
+    }
     b.gap();
     const scen: [string, Scenario, ScenarioResult][] = [[ev.project ? "ก่อนเข้าร่วมโครงการ" : "ข้อมูลกิจกรรม", rec.baseline, ev.baseline]];
     if (ev.project) scen.push(["หลังเข้าร่วมโครงการ", rec.project, ev.project]);

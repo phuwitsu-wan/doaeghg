@@ -320,7 +320,12 @@ details.more summary { cursor: pointer; color: var(--indigo-2); font-weight: 600
 .gauge .mk { position: absolute; top: -7px; width: 4px; height: 26px; background: var(--ink); border-radius: 2px; transform: translateX(-2px); }
 .gauge .mk span { position: absolute; top: -1.45rem; left: 50%; transform: translateX(-50%); font-size: 0.78rem; font-weight: 700; white-space: nowrap; }
 .gauge .ref { position: absolute; top: 14px; font-size: 0.75rem; color: var(--muted); transform: translateX(-50%); white-space: nowrap; }
-.tally-level { margin-top: 0.9rem; font-weight: 700; color: var(--c); }
+.tally-level { margin-top: 0.9rem; padding: 0.6rem 0.75rem; border-left: 4px solid var(--c); background: var(--bg); border-radius: 0 6px 6px 0; }
+.tally-level b { color: var(--c); font-size: 1.05rem; }
+.tally-level p { margin-top: 0.2rem; line-height: 1.45; }
+.legend li .nm { flex: 1; min-width: 0; line-height: 1.3; }
+.legend li .nm small { display: block; color: var(--muted); font-variant-numeric: tabular-nums; }
+.legend li .pc { width: auto; font-weight: 600; color: var(--ink); align-self: flex-start; }
 pre.code { background: var(--indigo); color: #fff; padding: 1rem; border-radius: var(--radius); overflow-x: auto; font-size: 0.8rem; line-height: 1.45; }
 
 .credit-foot { margin-top: 2rem; padding-top: 1rem; border-top: 2px dashed var(--line); font-size: 0.85rem; color: var(--muted); line-height: 1.6; }

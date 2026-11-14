@@ -1,11 +1,24 @@
-import { useState } from "react";
+import { createContext, useContext, useState } from "react";
 import { CFOA, FUELS, MACHINES, ORGANIC_FERTS, RESIDUES, ROOT_RATIOS, SF_P, SF_W, TRANSPORT_FUELS, type CFOAKey, type MachineKey, type RootKey, type SFpKey, type SFwKey, type TransportKey } from "@/lib/engine/factors";
 import { ALLOMETRIC, treeBiomass } from "@/lib/engine/trees";
-import { nPctFromFormula } from "@/lib/engine/calc";
-import type { CropGroup, FieldRecord, MachineUse, Scenario, TreeInventory, TreeRow } from "@/lib/engine/types";
+import { nPctFromFormula, transportLiters } from "@/lib/engine/calc";
+import type { CropGroup, FieldRecord, MachineUse, Scenario, TransportUse, TreeInventory, TreeRow } from "@/lib/engine/types";
 import { CROP_NAMES, uid } from "@/lib/defaults";
 import { Choice, Item, Num, NumInput, Q, Select, Text } from "@/components/ui";
 import { AddressPicker } from "@/components/Address";
+import { MACHINE_DEFS, machinesFor, noMachineNote, RICE_PLANT_METHODS, VEHICLES, vehiclesFor, type MachineDef, type MachineDefId, type Stage } from "@/lib/machines";
+import { YIELD_RANGE, yieldIssue } from "@/lib/benchmark";
+
+const KG = { label: "กก./ไร่", scale: 1 };
+const TON = { label: "ตัน/ไร่", scale: 1000 };
+/** อ้อยและมันสำปะหลังนิยมนับเป็นตัน จึงให้หน่วยตันขึ้นก่อน */
+const yieldUnits = (cropName: string, areaRai: number) => {
+  const base = YIELD_RANGE[cropName]?.tons ? [TON, KG] : [KG, TON];
+  // ผลผลิตรวมทั้งแปลง (เช่น น้ำหนักที่ชั่งที่โรงงาน) แปลงเป็นต่อไร่ให้อัตโนมัติ
+  return areaRai > 0 ? [...base, { label: "ตันทั้งแปลง", scale: 1000 / areaRai }] : base;
+};
+const totalHint = (kgPerRai: number, areaRai: number) =>
+  kgPerRai > 0 && areaRai > 0 ? `รวมทั้งแปลง ≈ ${fmt1((kgPerRai * areaRai) / 1000)} ตัน (${fmt1(kgPerRai / 1000)} ตัน/ไร่) แตะหน่วยเพื่อสลับ` : "แตะหน่วยเพื่อสลับ กก./ไร่, ตัน/ไร่ หรือ ตันทั้งแปลง";
 
 export type UpdS = (fn: (s: Scenario) => void) => void;
 export type UpdR = (fn: (r: FieldRecord) => void) => void;
@@ -50,10 +63,12 @@ export function PlotStep({ rec, upd }: { rec: FieldRecord; upd: UpdR }) {
             }
           })} />
           {rec.crop !== "forest" && (
-            <Num label={rec.hasProject ? "ผลผลิต ก่อนเข้าร่วมโครงการ" : "ผลผลิต"} unit="กก./ไร่" value={rec.baseline.yieldKgPerRai} onChange={(v) => upd((r) => { r.baseline.yieldKgPerRai = v; })} />
+            <Num key={`yb-${rec.cropName}`} label={rec.hasProject ? "ผลผลิต ก่อนเข้าร่วมโครงการ" : "ผลผลิต"} units={yieldUnits(rec.cropName, rec.baseline.areaRai)} value={rec.baseline.yieldKgPerRai}
+              warn={yieldIssue(rec.cropName, rec.baseline.yieldKgPerRai)} hint={totalHint(rec.baseline.yieldKgPerRai, rec.baseline.areaRai)} onChange={(v) => upd((r) => { r.baseline.yieldKgPerRai = v; })} />
           )}
           {rec.crop !== "forest" && rec.hasProject && (
-            <Num label="ผลผลิต หลังเข้าร่วมโครงการ" unit="กก./ไร่" value={rec.project.yieldKgPerRai} onChange={(v) => upd((r) => { r.project.yieldKgPerRai = v; })} />
+            <Num key={`yp-${rec.cropName}`} label="ผลผลิต หลังเข้าร่วมโครงการ" units={yieldUnits(rec.cropName, rec.project.areaRai)} value={rec.project.yieldKgPerRai}
+              warn={yieldIssue(rec.cropName, rec.project.yieldKgPerRai)} hint={totalHint(rec.project.yieldKgPerRai, rec.project.areaRai)} onChange={(v) => upd((r) => { r.project.yieldKgPerRai = v; })} />
           )}
         </div>
       </Q>
@@ -79,48 +94,46 @@ export function PlotStep({ rec, upd }: { rec: FieldRecord; upd: UpdR }) {
 }
 
 /* ====================== เครื่องจักร ====================== */
-const STAGE_MACHINES: Record<string, MachineKey[]> = {
-  เตรียมดิน: ["tractorM", "tractorXS"],
-  ปลูก: ["transplanterWalk", "transplanterRide", "tractorS"],
-  สูบน้ำ: ["pump"],
-  "ใส่ปุ๋ย/ฉีดพ่น/ดูแล": ["sprayer", "tractorS"],
-  เก็บเกี่ยว: ["combine", "caneHarvester", "tractorM"],
-  จัดการเศษวัสดุ: ["tractorS"],
-};
-const TRACTORS: MachineKey[] = ["tractorXS", "tractorS", "tractorM", "tractorL"];
-const isTractor = (k: MachineKey) => TRACTORS.includes(k);
+/** ชนิดพืชของแปลงที่กำลังกรอก ใช้เลือกรายการเครื่องจักรให้ตรงกับพืช */
+export const CropCtx = createContext<{ crop: CropGroup; cropName: string }>({ crop: "rice", cropName: "" });
+
 /** แบ่งกลุ่มรถแทรกเตอร์ตามแรงม้า [MRV Eq.8.2]: < 21, 21–45, 46–75, > 75 แรงม้า */
 export const tractorClass = (hp: number): MachineKey => (hp < 21 ? "tractorXS" : hp <= 45 ? "tractorS" : hp <= 75 ? "tractorM" : "tractorL");
-const DEFAULT_HP: Partial<Record<MachineKey, number>> = { tractorXS: 12, tractorS: 35, tractorM: 60, tractorL: 90 };
 const HP_RANGE: Partial<Record<MachineKey, string>> = { tractorXS: "ต่ำกว่า 21 แรงม้า", tractorS: "21–45 แรงม้า", tractorM: "46–75 แรงม้า", tractorL: "มากกว่า 75 แรงม้า" };
-const SHORT: Partial<Record<MachineKey, string>> = {
-  tractorXS: "รถไถเดินตาม / แทรกเตอร์จิ๋ว", tractorS: "รถแทรกเตอร์", tractorM: "รถแทรกเตอร์", tractorL: "รถแทรกเตอร์",
-  transplanterWalk: "รถดำนาเดินตาม", transplanterRide: "รถดำนานั่งขับ", pump: "เครื่องสูบน้ำน้ำมัน",
-  sprayer: "เครื่องพ่นสะพายหลัง", combine: "รถเกี่ยวนวดข้าว", caneHarvester: "รถตัดอ้อย",
-};
+const FUEL_TEXT = (f: MachineUse["fuel"]) => (f === "electric" ? "ไฟฟ้า" : FUELS[f]?.label ?? "ดีเซล");
 
 function MachineRow({ m, s, upd }: { m: MachineUse; s: Scenario; upd: UpdS }) {
   const [fine, setFine] = useState(false);
+  const def = Object.values(MACHINE_DEFS).find((d) => d.label === m.label);
   const set = (p: Partial<MachineUse>) => upd((x) => { const r = x.machines.find((y) => y.id === m.id); if (r) Object.assign(r, p); });
   const remove = () => upd((x) => { x.machines = x.machines.filter((y) => y.id !== m.id); });
+  const name = m.label ?? MACHINES[m.machine].label;
   if (m.fuel === "electric") {
     return (
-      <Item title="ปั๊มน้ำไฟฟ้า" onRemove={remove}>
-        <Num label="ไฟฟ้าที่ใช้ทั้งฤดู" unit="kWh" value={m.kwh} onChange={(v) => set({ kwh: v })} hint="ดูจากบิลค่าไฟ หรือ กำลังมอเตอร์ (kW) × ชั่วโมงที่สูบ" />
+      <Item title={name} onRemove={remove}>
+        <Num label="ไฟฟ้าที่ใช้ทั้งฤดู" unit="kWh" value={m.kwh} onChange={(v) => set({ kwh: v })} hint={def?.note ?? "ดูจากบิลค่าไฟ หรือ กำลังมอเตอร์ (kW) × ชั่วโมงที่ใช้"} />
+        {fine ? (
+          <Select label="แหล่งพลังงาน" value={m.fuel as string} options={[["electric", "ไฟฟ้า"], ...Object.entries(FUELS).map(([k, v]) => [k, `${v.label} (เครื่องปั่นไฟ)`] as [string, string])]}
+            onChange={(v) => set({ fuel: v as MachineUse["fuel"], mode: "liters" })} />
+        ) : (
+          <div className="field" style={{ alignSelf: "end" }}><button type="button" className="btn-link" onClick={() => setFine(true)}>ใช้เครื่องปั่นไฟแทนไฟบ้าน</button></div>
+        )}
       </Item>
     );
   }
+  const hasHp = m.hp !== undefined;
   const liters = m.mode === "liters" ? m.liters : m.hoursPerRai * Math.max(1, m.times) * m.lph * s.areaRai;
   return (
-    <Item title={<>{SHORT[m.machine] ?? MACHINES[m.machine].label}{isTractor(m.machine) && m.hp ? ` ${m.hp} แรงม้า` : ""} <span className="muted small">ใช้{FUELS[m.fuel as keyof typeof FUELS]?.label ?? "ดีเซล"} ≈ {fmt1(liters)} ลิตร</span></>} onRemove={remove}>
-      {isTractor(m.machine) && (
-        <Num label="ขนาดเครื่องยนต์" unit="แรงม้า" value={m.hp ?? 0}
-          hint={`${HP_RANGE[m.machine] ?? ""} ใช้น้ำมัน ${MACHINES[m.machine].lph} ลิตร/ชม.`}
+    <Item title={<>{name}{hasHp && m.hp ? ` ${m.hp} แรงม้า` : ""} <span className="muted small">ใช้{FUEL_TEXT(m.fuel)} ≈ {fmt1(liters)} ลิตร</span></>} onRemove={remove}>
+      {hasHp && (
+        <Num label="ขนาดเครื่องยนต์แทรกเตอร์" unit="แรงม้า" value={m.hp ?? 0}
+          hint={`${HP_RANGE[m.machine] ?? ""} ใช้น้ำมัน ${MACHINES[m.machine].lph} ลิตร/ชม. (คู่มือ MRV)`}
           onChange={(v) => { const k = tractorClass(v || 0); set({ hp: v, machine: k, lph: MACHINES[k].lph }); }} />
       )}
       {m.mode === "hours" ? (
         <>
-          <Num label="เวลาทำงาน" unit="ชม./ไร่" value={m.hoursPerRai} onChange={(v) => set({ hoursPerRai: v })} />
+          <Num label="เวลาทำงาน" unit="ชม./ไร่" value={m.hoursPerRai} onChange={(v) => set({ hoursPerRai: v })}
+            hint={def?.perTonHour ? `คีบได้ ${def.perTonHour} ตัน/ชม. ผลผลิต ${fmt1(s.yieldKgPerRai / 1000)} ตัน/ไร่ ≈ ${fmt1(s.yieldKgPerRai / 1000 / def.perTonHour)} ชม./ไร่` : undefined} />
           <Num label="ทำกี่ครั้ง" unit="ครั้ง" value={m.times} onChange={(v) => set({ times: v })} />
         </>
       ) : (
@@ -141,23 +154,31 @@ function MachineRow({ m, s, upd }: { m: MachineUse; s: Scenario; upd: UpdS }) {
           <button type="button" className="btn-link" onClick={() => setFine(true)}>ปรับชนิดน้ำมัน / อัตราสิ้นเปลือง</button>
         </div>
       )}
+      {def?.note && !def.perTonHour && <p className="hint" style={{ gridColumn: "1 / -1" }}>{def.note}</p>}
     </Item>
   );
 }
 
-export function Machines({ s, upd, stage, electric }: { s: Scenario; upd: UpdS; stage: string; electric?: boolean }) {
+export function Machines({ s, upd, stage }: { s: Scenario; upd: UpdS; stage: Stage }) {
+  const { crop, cropName } = useContext(CropCtx);
+  const ids = machinesFor(crop, cropName, stage, s.rice.plantMethod);
   const rows = s.machines.filter((m) => m.stage === stage);
-  const add = (k: MachineKey | "electric") => upd((x) => {
-    const mk: MachineKey = k === "electric" ? "pump" : k;
-    x.machines.push({ id: uid(), stage, machine: mk, fuel: k === "electric" ? "electric" : MACHINES[mk].fuel, mode: "hours", hoursPerRai: 0, times: 1, lph: MACHINES[mk].lph, liters: 0, kwh: 0, hp: DEFAULT_HP[mk] });
+  const add = (id: MachineDefId) => upd((x) => {
+    const d: MachineDef = MACHINE_DEFS[id];
+    const base = d.hp !== undefined ? tractorClass(d.hp) : d.base;
+    const hours = d.perTonHour && x.yieldKgPerRai > 0 ? Math.round((x.yieldKgPerRai / 1000 / d.perTonHour) * 100) / 100 : 0;
+    x.machines.push({ id: uid(), stage, machine: base, label: d.label, fuel: d.fuel, mode: "hours", hoursPerRai: hours, times: 1,
+      lph: d.hp !== undefined ? MACHINES[base].lph : d.lph, liters: 0, kwh: 0, hp: d.hp });
   });
+  const note = ids.length === 0 ? noMachineNote(crop, stage) : null;
   return (
     <div>
+      {note && <p className="muted small">{note}</p>}
       <div className="chips">
-        {STAGE_MACHINES[stage].map((k) => (
-          <button key={k} type="button" className="chip chip-add" onClick={() => add(k)}>+ {k === "tractorXS" ? "รถไถเดินตาม" : SHORT[k]}<small>{isTractor(k) && k !== "tractorXS" ? "ระบุแรงม้าได้" : `${MACHINES[k].lph} ลิตร/ชม.`}</small></button>
-        ))}
-        {electric && <button type="button" className="chip chip-add" onClick={() => add("electric")}>+ ปั๊มน้ำไฟฟ้า<small>คิดจาก kWh</small></button>}
+        {ids.map((id) => {
+          const d: MachineDef = MACHINE_DEFS[id];
+          return <button key={id} type="button" className="chip chip-add" onClick={() => add(id)}>+ {d.label}<small>{d.sub}</small></button>;
+        })}
       </div>
       {rows.map((m) => <MachineRow key={m.id} m={m} s={s} upd={upd} />)}
     </div>
@@ -235,11 +256,18 @@ export function PlantStep({ s, upd, crop }: { s: Scenario; upd: UpdS; crop: Crop
           </Q>
         </>
       )}
-      <Q title="ใช้เครื่องจักรปลูกไหม">
-        <Machines s={s} upd={upd} stage="ปลูก" />
-      </Q>
+      {rice && (
+        <Q title="ปลูกข้าวด้วยวิธีไหน">
+          <Choice boxy label="วิธีปลูกข้าว" value={s.rice.plantMethod ?? ""} onChange={(v) => upd((x) => { x.rice.plantMethod = v; })} options={RICE_PLANT_METHODS} />
+        </Q>
+      )}
+      {!(rice && s.rice.plantMethod === "transplant") && (
+        <Q title={rice ? "ใช้เครื่องจักรหรือโดรนปลูกไหม" : "ใช้เครื่องจักรปลูกไหม"} help={rice && !s.rice.plantMethod ? "เลือกวิธีปลูกด้านบนก่อน ระบบจะแสดงเฉพาะเครื่องที่ใช้กับวิธีนั้น" : undefined}>
+          <Machines s={s} upd={upd} stage="ปลูก" />
+        </Q>
+      )}
       <Q title={rice ? "สูบน้ำเข้านาไหม" : "ให้น้ำด้วยเครื่องสูบน้ำไหม"}>
-        <Machines s={s} upd={upd} stage="สูบน้ำ" electric />
+        <Machines s={s} upd={upd} stage="สูบน้ำ" />
       </Q>
     </>
   );
@@ -305,6 +333,38 @@ export function FertStep({ s, upd, care }: { s: Scenario; upd: UpdS; care?: bool
   );
 }
 
+function TransportRow({ t, s, upd }: { t: TransportUse; s: Scenario; upd: UpdS }) {
+  const set = (p: Partial<TransportUse>) => upd((x) => { const r = x.transports.find((y) => y.id === t.id); if (r) Object.assign(r, p); });
+  const remove = () => upd((x) => { x.transports = x.transports.filter((y) => y.id !== t.id); });
+  if (t.mode !== "distance") {
+    return (
+      <Item title="การขนส่ง (กรอกเป็นเชื้อเพลิง)" onRemove={remove}>
+        <Text label="ขนอะไร ไปไหน" placeholder="เช่น ฟางอัดก้อนไปโรงไฟฟ้า" value={t.desc} onChange={(v) => set({ desc: v })} />
+        <Select<TransportKey> label="เชื้อเพลิง" value={t.fuel} options={Object.entries(TRANSPORT_FUELS).map(([k, v]) => [k as TransportKey, v.label])} onChange={(v) => set({ fuel: v })} />
+        <Num label="ใช้เชื้อเพลิงรวม" unit={TRANSPORT_FUELS[t.fuel].unit === "kg" ? "กก." : "ลิตร"} value={t.amount} onChange={(v) => set({ amount: v })} />
+      </Item>
+    );
+  }
+  const v = VEHICLES.find((x) => x.id === t.vehicle);
+  const liters = transportLiters(t);
+  const totalT = (s.yieldKgPerRai * s.areaRai) / 1000;
+  return (
+    <Item title={<>{v?.label ?? "รถขนส่ง"} <span className="muted small">ดีเซล ≈ {fmt1(liters)} ลิตร</span></>} onRemove={remove}>
+      <Text label="ขนอะไร ไปไหน" placeholder="เช่น อ้อยไปโรงงานน้ำตาล" value={t.desc} onChange={(x) => set({ desc: x })} />
+      <Num label="ระยะทางเที่ยวเดียว" unit="กม." value={t.km ?? 0} onChange={(x) => set({ km: x })} />
+      <Num label="จำนวนเที่ยว" unit="เที่ยว" value={t.trips ?? 0} onChange={(x) => set({ trips: Math.round(x) })}
+        hint={v && totalT > 0 ? `ผลผลิตรวม ${fmt1(totalT)} ตัน ÷ ${v.tons} ตัน/เที่ยว ≈ ${Math.ceil(totalT / v.tons)} เที่ยว` : undefined} />
+      <Num label="อัตราสิ้นเปลือง" unit="กม./ลิตร" value={t.kmPerL ?? 0} onChange={(x) => set({ kmPerL: x })} hint={v ? `ปกติ ${v.range}` : undefined} />
+      <div className="field" style={{ alignSelf: "end" }}>
+        <label className="row small" style={{ gap: "0.5rem", cursor: "pointer" }}>
+          <input type="checkbox" style={{ width: 20, height: 20, accentColor: "var(--indigo)" }} checked={t.roundTrip !== false} onChange={(e) => set({ roundTrip: e.target.checked })} />
+          คิดเที่ยวรถเปล่ากลับด้วย
+        </label>
+      </div>
+    </Item>
+  );
+}
+
 /* ====================== ขั้นที่ 5: เก็บเกี่ยวและเศษวัสดุ ====================== */
 type ResMode = "keep" | "remove" | "burnAll" | "burnSome";
 function resMode(s: Scenario): ResMode {
@@ -316,6 +376,7 @@ function resMode(s: Scenario): ResMode {
 }
 
 export function HarvestStep({ s, upd, crop }: { s: Scenario; upd: UpdS; crop: CropGroup }) {
+  const { cropName } = useContext(CropCtx);
   const isTree = crop === "fruit" || crop === "forest";
   const mode = resMode(s);
   const res = RESIDUES[s.residue.type] ?? RESIDUES.other;
@@ -356,22 +417,28 @@ export function HarvestStep({ s, upd, crop }: { s: Scenario; upd: UpdS; crop: Cr
           <Machines s={s} upd={upd} stage="จัดการเศษวัสดุ" />
         </Q>
       )}
-      <Q title="ขนส่งเศษพืชหรือผลผลิตออกจากแปลงไหม" help="คิดจากน้ำมันที่รถขนส่งใช้">
+      <Q title="ขนส่งผลผลิตหรือเศษพืชออกจากแปลงไหม" help="เลือกชนิดรถ แล้วกรอกระยะทางและจำนวนเที่ยว ระบบคิดน้ำมันจากอัตราสิ้นเปลืองของรถให้">
         <Choice label="มีการขนส่ง" value={ship ? "y" : "n"} onChange={(v) => {
           setShip(v === "y");
           if (v === "n") upd((x) => { x.transports = []; });
-          else if (!s.transports.length) upd((x) => { x.transports.push({ id: uid(), desc: "", fuel: "diesel", amount: 0 }); });
         }} options={[{ key: "n", label: "ไม่มี" }, { key: "y", label: "มี" }]} />
-        {ship && s.transports.map((t) => (
-          <Item key={t.id} title="การขนส่ง" onRemove={() => upd((x) => { x.transports = x.transports.filter((y) => y.id !== t.id); })}>
-            <Text label="ขนอะไร ไปไหน" placeholder="เช่น ฟางอัดก้อนไปโรงไฟฟ้า" value={t.desc} onChange={(v) => upd((x) => { const r = x.transports.find((y) => y.id === t.id); if (r) r.desc = v; })} />
-            <Select<TransportKey> label="เชื้อเพลิง" value={t.fuel} options={Object.entries(TRANSPORT_FUELS).map(([k, v]) => [k as TransportKey, v.label])}
-              onChange={(v) => upd((x) => { const r = x.transports.find((y) => y.id === t.id); if (r) r.fuel = v; })} />
-            <Num label="ใช้เชื้อเพลิงรวม" unit={TRANSPORT_FUELS[t.fuel].unit === "kg" ? "กก." : "ลิตร"} value={t.amount}
-              onChange={(v) => upd((x) => { const r = x.transports.find((y) => y.id === t.id); if (r) r.amount = v; })} />
-          </Item>
-        ))}
-        {ship && <button type="button" className="btn-link" onClick={() => upd((x) => { x.transports.push({ id: uid(), desc: "", fuel: "diesel", amount: 0 }); })}>+ เพิ่มเที่ยวขนส่ง</button>}
+        {ship && (
+          <>
+            <div className="chips" style={{ marginTop: "0.75rem" }}>
+              {vehiclesFor(crop, cropName).map((v) => (
+                <button key={v.id} type="button" className="chip chip-add" onClick={() => upd((x) => {
+                  const totalT = (x.yieldKgPerRai * x.areaRai) / 1000;
+                  x.transports.push({ id: uid(), desc: "", fuel: "diesel", amount: 0, mode: "distance", vehicle: v.id, km: 0,
+                    trips: totalT > 0 ? Math.ceil(totalT / v.tons) : 1, kmPerL: v.kmPerL, roundTrip: true });
+                })}>+ {v.label}<small>{v.sub}, {v.range}</small></button>
+              ))}
+              <button type="button" className="chip chip-add" onClick={() => upd((x) => { x.transports.push({ id: uid(), desc: "", fuel: "diesel", amount: 0, mode: "fuel" }); })}>
+                + กรอกเป็นลิตรน้ำมัน<small>รู้ปริมาณน้ำมันที่ใช้</small>
+              </button>
+            </div>
+            {s.transports.map((t) => <TransportRow key={t.id} t={t} s={s} upd={upd} />)}
+          </>
+        )}
       </Q>
     </>
   );

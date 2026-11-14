@@ -10,7 +10,7 @@ import { Glyph } from "@/components/Glyph";
 import { exportXlsx } from "@/lib/exportXlsx";
 import { getProfile, logEvent } from "@/lib/profile";
 import { assess } from "@/lib/benchmark";
-import { FertStep, HarvestStep, PlantStep, PlotStep, PrepStep, TreeStep } from "./steps";
+import { CropCtx, FertStep, HarvestStep, PlantStep, PlotStep, PrepStep, TreeStep } from "./steps";
 
 type StepKey = "plot" | "prep" | "plant" | "fert" | "harvest" | "trees" | "care" | "residue" | "result";
 const STEP_INFO: Record<StepKey, { name: string; title: string; lead: string; scenario: boolean }> = {
@@ -135,6 +135,7 @@ export function Record({ id }: { id: string }) {
             </div>
           )}
 
+          <CropCtx.Provider value={{ crop: rec.crop, cropName: rec.cropName }}>
           {cur === "plot" && <PlotStep rec={rec} upd={update} />}
           {cur === "prep" && <PrepStep key={v} s={s} upd={updS} />}
           {cur === "plant" && <PlantStep key={v} s={s} upd={updS} crop={rec.crop} />}
@@ -143,6 +144,7 @@ export function Record({ id }: { id: string }) {
           {cur === "trees" && <TreeStep t={rec.trees} upd={updT} />}
           {cur === "care" && <FertStep key={v} s={s} upd={updS} care />}
           {cur === "residue" && <HarvestStep key={v} s={s} upd={updS} crop={rec.crop} />}
+          </CropCtx.Provider>
           {cur === "result" && (
             <>
               <div className="print-only" style={{ marginBottom: "1rem" }}>

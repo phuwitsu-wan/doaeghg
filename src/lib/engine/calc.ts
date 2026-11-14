@@ -150,7 +150,7 @@ export function calcScenario(s: Scenario, crop: CropGroup, standard: Standard, s
   push({ key: "fuel", label: "การเผาไหม้น้ำมันของเครื่องจักรกลเกษตร", group: "energy", gas: "mix", kgCO2e: fuelKg, eq: "Eq.8" });
   push({ key: "elec", label: "การใช้ไฟฟ้า (เช่น สูบน้ำ)", group: "energy", gas: "CO2", kgCO2e: elecKg, eq: `Eq.9 (${efE} kgCO₂e/kWh)` });
   let trKg = 0;
-  for (const t of s.transports) trKg += num(t.amount) * (TRANSPORT_FUELS[t.fuel]?.ef ?? 0);
+  for (const t of s.transports) trKg += transportLiters(t) * (TRANSPORT_FUELS[t.fuel]?.ef ?? 0);
   push({ key: "transport", label: "การขนส่ง (ฟาง/ใบอ้อย/ผลผลิต)", group: "energy", gas: "mix", kgCO2e: trKg, eq: "Eq.10" });
 
   const total = lines.reduce((x, y) => x + y.kgCO2e, 0);
@@ -175,3 +175,14 @@ export function calcScenario(s: Scenario, crop: CropGroup, standard: Standard, s
 
 export const lineValue = (r: ScenarioResult, key: string) => r.lines.find((l) => l.key === key)?.kgCO2e ?? 0;
 export const sumLines = (r: ScenarioResult, keys: string[]) => keys.reduce((s, k) => s + lineValue(r, k), 0);
+
+/** ปริมาณเชื้อเพลิงของการขนส่ง 1 รายการ (ลิตร หรือ กก.) [MRV Eq.10]
+ *  แบบระยะทาง: ระยะทาง × (2 ถ้าคิดเที่ยวกลับ) × จำนวนเที่ยว ÷ กม./ลิตร */
+export function transportLiters(t: import("./types").TransportUse): number {
+  if (t.mode === "distance") {
+    const kmpl = num(t.kmPerL);
+    if (kmpl <= 0) return 0;
+    return num(t.km) * (t.roundTrip === false ? 1 : 2) * Math.max(0, num(t.trips)) / kmpl;
+  }
+  return num(t.amount);
+}

@@ -1,6 +1,6 @@
 import type { Evaluation } from "@/lib/engine/evaluate";
 import type { FieldRecord, ScenarioResult, Settings, SourceLine } from "@/lib/engine/types";
-import { assess, LEVEL_TEXT, type Assessment } from "@/lib/benchmark";
+import { assess, LEVEL_RULE, LEVEL_TEXT, levelSentence, yieldIssue, type Assessment } from "@/lib/benchmark";
 import { co2, co2s, fmt } from "@/lib/format";
 
 export const GROUPS: Record<SourceLine["group"], { label: string; color: string }> = {
@@ -53,7 +53,7 @@ export function Tally({ ev, rec, view, settings }: { ev: Evaluation; rec: FieldR
         <Band r={r} />
         <ul className="legend">
           {groups(r).map(([k, v]) => (
-            <li key={k}><span className="sw" style={{ background: GROUPS[k].color }} />{GROUPS[k].label}<span className="v">{co2s(v)}</span><span className="pc">{pct(v, r.totalKgCO2e)}</span></li>
+            <li key={k}><span className="sw" style={{ background: GROUPS[k].color }} /><span className="nm">{GROUPS[k].label}<small>{co2s(v)}</small></span><span className="pc">{pct(v, r.totalKgCO2e)}</span></li>
           ))}
           {r.totalKgCO2e === 0 && <li className="muted">กรอกข้อมูลแล้วยอดจะขึ้นที่นี่ทันที</li>}
         </ul>
@@ -63,7 +63,13 @@ export function Tally({ ev, rec, view, settings }: { ev: Evaluation; rec: FieldR
         </div>
         {(() => {
           const a = assess(rec, ev, settings, view);
-          return a ? <p className="tally-level" style={{ "--c": LEVEL_TEXT[a.level].color } as React.CSSProperties}>{LEVEL_TEXT[a.level].title} ({fmt(a.ratio * 100, 0)}% ของค่าอ้างอิง)</p> : null;
+          return a ? (
+            <div className="tally-level" style={{ "--c": LEVEL_TEXT[a.level].color } as React.CSSProperties}>
+              <b>{LEVEL_TEXT[a.level].title}</b>
+              <p className="small">{levelSentence(a)}</p>
+              <p className="small muted">เกณฑ์: {LEVEL_TEXT[a.level].title} = {LEVEL_RULE[a.level]}</p>
+            </div>
+          ) : null;
         })()}
         {ev.reductionKgCO2e != null && !(ev.trees && !ev.project) && (
           <div className="credit">
@@ -223,7 +229,11 @@ function LevelSection({ a, rec, hasProject }: { a: Assessment | null; rec: Field
   return (
     <section>
       <h2>ระดับการปล่อยเมื่อเทียบค่าอ้างอิง</h2>
-      {!a ? (
+      {!a && yieldIssue(rec.cropName, (hasProject ? rec.project : rec.baseline).yieldKgPerRai) ? (
+        <p className="warn" style={{ marginTop: "0.5rem" }}>
+          ยังเทียบไม่ได้: {yieldIssue(rec.cropName, (hasProject ? rec.project : rec.baseline).yieldKgPerRai)} (แก้ได้ในขั้นที่ 1 แปลง)
+        </p>
+      ) : !a ? (
         <p className="muted" style={{ marginTop: "0.5rem" }}>
           {rec.baseline.yieldKgPerRai > 0
             ? `ยังไม่มีค่าอ้างอิงสำหรับ${rec.cropName} ผู้ดูแลระบบกำหนดค่าเองได้ในหน้าตั้งค่า`
@@ -232,13 +242,11 @@ function LevelSection({ a, rec, hasProject }: { a: Assessment | null; rec: Field
       ) : (
         <div className="level" style={{ "--c": LEVEL_TEXT[a.level].color } as React.CSSProperties}>
           <p className="t">{LEVEL_TEXT[a.level].title}{hasProject ? " (หลังเข้าร่วมโครงการ)" : ""}</p>
-          <p>
-            แปลงนี้ปล่อย <b className="num">{fmt(a.value, 3)}</b> kgCO₂e ต่อ{a.product} 1 กก. เทียบกับค่าอ้างอิง <b className="num">{a.ref}</b> kgCO₂e
-            {" "}คิดเป็น <b className="num">{fmt(a.ratio * 100, 0)}%</b> ของค่าอ้างอิง
-          </p>
+          <p>{levelSentence(a)}</p>
+          <p className="small">เกณฑ์: {LEVEL_TEXT[a.level].title} = {LEVEL_RULE[a.level]}</p>
           <Gauge ratio={a.ratio} />
           <p className="small muted">
-            เกณฑ์: ต่ำกว่า 80% ของค่าอ้างอิง = ต่ำกว่าค่าอ้างอิง, 80–120% = อยู่ในเกณฑ์, เกิน 120% = สูงกว่าค่าอ้างอิง
+            เกณฑ์ทั้งหมด: ต่ำกว่าค่าอ้างอิง = {LEVEL_RULE.low}, อยู่ในเกณฑ์ = {LEVEL_RULE.near}, สูงกว่าค่าอ้างอิง = {LEVEL_RULE.high}
             <br />ค่าอ้างอิง: {a.source}
             <br />ประเทศไทยยังไม่มีมาตรฐานการปล่อยระดับแปลงตามกฎหมาย จึงเทียบกับค่าเฉลี่ยจากงานวิจัยในประเทศ ขอบเขตการคำนวณของแต่ละงานอาจต่างกัน
           </p>
