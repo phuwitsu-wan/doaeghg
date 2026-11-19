@@ -31,7 +31,7 @@ export function emptyTrees(crop: CropGroup): TreeInventory {
   return {
     method: "allometric",
     equation: "general",
-    rootRatio: crop === "forest" ? "moistDecid" : "moistDecid",
+    rootRatio: "tgoGeneral",
     carbonFraction: 0.47,
     plotAreaRai: 1,
     baseline: [],

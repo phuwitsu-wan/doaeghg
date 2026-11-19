@@ -1,4 +1,7 @@
-import type { CFOAKey, FuelKey, GwpKey, MachineKey, ResidueKey, RootKey, SFpKey, SFwKey, TransportKey, ElecKey } from "./factors";
+import type {
+  CFOAKey, ClimateKey, DeadwoodKey, ElecKey, FiKey, FluKey, FmgKey, FpermKey, FuelKey, GwpKey, MachineKey, ResidueKey, RootKey,
+  SFpKey, SFwKey, SoilClassKey, TransportKey,
+} from "./factors";
 
 export type CropGroup = "rice" | "field" | "vegetable" | "fruit" | "forest";
 export type Standard = "mrv" | "tver";
@@ -98,6 +101,51 @@ export interface TreeInventory {
   current: TreeRow[]; // ปีที่ติดตามผล (t)
   years: number; // ระยะเวลาระหว่าง t0 กับ t
   treeCount: number; // สำหรับ method = count
+  /** ไม้ขุดล้อมมาปลูก: ไม่คิดมวลชีวภาพใต้ดิน (bBLG = 0) [TOOL-01-01 ขั้นตอนที่ 3] */
+  transplanted?: boolean;
+  /** ไม้ตายและเศษซากพืช [TOOL-01-03] */
+  deadwood?: DeadwoodKey;
+}
+
+/** ตัวอย่างดิน 1 จุด (0–30 ซม.) */
+export interface SoilSample {
+  id: string;
+  socPct: number; // กรัมคาร์บอน/ดิน 100 กรัม (%OC)
+  bd: number; // ความหนาแน่นรวม g/cm³
+  depthCm: number; // ความลึก ≥ 30 ซม.
+}
+/** คาร์บอนในดิน [T-VER-S-TOOL-01-02] */
+export interface SoilCarbon {
+  enabled: boolean;
+  method: "sample" | "ref"; // ทางเลือกที่ 1 เก็บตัวอย่าง / ทางเลือกที่ 2 ค่าอ้างอิง (โครงการ ≤ 1,000 tCO2e/ปี)
+  baseline: SoilSample[];
+  current: SoilSample[];
+  years: number; // ปีที่ติดตามผล
+  climate: ClimateKey;
+  soilClass: SoilClassKey;
+  socRefCustom: number | null; // tC/ha ถ้ามีค่าวัดจากพื้นที่ธรรมชาติ
+  bl: { flu: FluKey; fmg: FmgKey; fi: FiKey };
+  pj: { flu: FluKey; fmg: FmgKey; fi: FiKey };
+}
+/** ถ่านชีวภาพ [T-VER-P-METH-14-03] */
+export interface Biochar {
+  enabled: boolean;
+  tonnesDry: number; // W น้ำหนักแห้ง (ตัน/ปี)
+  focPct: number; // %C อินทรีย์ในถ่าน (ผลแล็บ)
+  process: FpermKey;
+  dieselL: number; // เชื้อเพลิงในการผลิต/ขนส่งในโครงการ
+  kwh: number;
+}
+/** ตัวเลือกการคิดคาร์บอนเครดิต T-VER */
+export interface TverOptions {
+  /** standard: S-METH, premium: P-METH */
+  track: "standard" | "premium";
+  /** ค่าปรับลดความไม่แน่นอน (0–1) */
+  ud: number;
+  /** คาร์บอนในวัสดุอินทรีย์ที่นำมาจากภายนอกและเพิ่มจากกรณีฐาน (กก.C) — รั่วไหล 12% */
+  outsideOrgC: number;
+  landRight: boolean; // มีหนังสือแสดงสิทธิในที่ดิน
+  history3y: boolean; // มีข้อมูลย้อนหลัง ≥ 3 ปี
 }
 
 export interface Settings {
@@ -131,6 +179,9 @@ export interface FieldRecord {
   baseline: Scenario;
   project: Scenario;
   trees: TreeInventory;
+  soil?: SoilCarbon;
+  biochar?: Biochar;
+  tverOpt?: TverOptions;
   /** ผู้บันทึก (เจ้าหน้าที่) ณ ตอนสร้างแปลง */
   createdBy?: { id: string; name: string; agency: string };
 }
@@ -152,5 +203,19 @@ export interface ScenarioResult {
   perKgProduct: number | null;
   byGas: { CO2: number; CH4: number; N2O: number };
   nInputs: { FSN: number; FON: number; FCR: number };
+  /** ข้อมูลกิจกรรม (activity data) ที่ใช้บันทึกพารามิเตอร์ตามมาตรฐาน */
+  activity: {
+    dieselL: number;
+    gasolineL: number;
+    otherFuelKgCO2: number;
+    kwh: number;
+    ureaKg: number;
+    limestoneKg: number;
+    dolomiteKg: number;
+    burnedRai: number;
+    burnedDmKg: number; // มวลแห้งที่ถูกเผา (ก่อนคูณ Cf)
+    burnCf: number;
+    rice?: { harvestedRai: number; days: number; sfw: number; sfp: number; sfo: number; efDaily: number };
+  };
   warnings: string[];
 }

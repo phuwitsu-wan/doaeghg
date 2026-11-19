@@ -10,7 +10,9 @@
  *  [TVER-13-08] T-VER-P-METH-13-08 v01 Enhanced Good Practices in Paddy Rice Field
  *  [TVER-13-05] T-VER-S-METH-13-05 v03 Good Fertilization Practice in Agricultural Land
  *  [TVER-13-06] T-VER-S-METH-13-06 v03 Perennial Crop Plantation
- *  [TVER-TOOL]  T-VER-TOOL-FOR/AGR-01 (T-VER-S-TOOL-01-01) Calculation for Carbon Sequestration
+ *  [TVER-TOOL]  T-VER-S-TOOL-01-01 v02 Carbon Sequestration in tree, -01-02 v02 Soil Carbon, -01-03 v02 Dead Wood & Litter
+ *  [TVER-P-13-06] T-VER-P-METH-13-06 v01 Good Agricultural Land Management (Premium)
+ *  [TVER-14-03] T-VER-P-METH-14-03 v01 Biochar
  */
 
 export const RAI_PER_HA = 6.25;
@@ -120,10 +122,21 @@ export type ResidueKey = string;
 /* ---------- Fuel & energy [MRV Eq.8–10, Worksheet 'Data & EF'] ---------- */
 /** Off-road (เครื่องจักรเกษตร) kgCO2e/L — IPCC Vol.2 Table 3.3.1 + NCV DEDE + GWP AR5 (ตาราง CFO ของ อบก.) */
 export const FUELS = {
-  diesel: { label: "ดีเซล", efPerL: 2.9793 },
-  gas4: { label: "เบนซิน 4 จังหวะ", efPerL: 2.2738 },
-  gas2: { label: "เบนซิน 2 จังหวะ", efPerL: 2.3171 },
+  diesel: { label: "ดีเซล", efPerL: 2.9793, co2PerL: 2.6987 },
+  gas4: { label: "เบนซิน 4 จังหวะ", efPerL: 2.2738, co2PerL: 2.1816 },
+  gas2: { label: "เบนซิน 2 จังหวะ", efPerL: 2.3171, co2PerL: 2.1816 },
 } as const;
+
+/**
+ * T-VER ภาคเกษตรคิดเฉพาะ CO₂ จากเชื้อเพลิง [TVER-13-05 Eq., 13-06, 13-08 §5.2.5]
+ * CO₂ (kg) = FC (L) × NCV (MJ/L) × 10⁻⁶ × EF_CO2 (kg/TJ)
+ * NCV: รายงานสถิติพลังงาน พพ. (ทางเลือกที่ 3); EF_CO2: IPCC 2006 Vol.2 Table 1.4
+ */
+export const FUEL_NCV = {
+  diesel: { label: "ดีเซล", ncv: 36.42, efCO2: 74100 },
+  gasoline: { label: "เบนซิน", ncv: 31.48, efCO2: 69300 },
+} as const;
+export const fuelCO2PerL = (k: keyof typeof FUEL_NCV) => FUEL_NCV[k].ncv * 1e-6 * FUEL_NCV[k].efCO2;
 export type FuelKey = keyof typeof FUELS;
 
 /** อัตราสิ้นเปลืองน้ำมันของเครื่องจักร L/ชม. [MRV Eq.8.2] */
@@ -151,12 +164,12 @@ export type ElecKey = keyof typeof ELEC_EF;
 
 /** การขนส่ง (On-road) [MRV Eq.10, ตาราง CFO อบก.] */
 export const TRANSPORT_FUELS = {
-  diesel: { label: "น้ำมันดีเซล (ลิตร)", ef: 2.7406, unit: "L" },
-  gasoline: { label: "น้ำมันเบนซิน – ไม่ควบคุม (ลิตร)", ef: 2.2394, unit: "L" },
-  gasolineCat: { label: "น้ำมันเบนซิน – มีตัวเร่งปฏิกิริยา (ลิตร)", ef: 2.2719, unit: "L" },
-  cng: { label: "ก๊าซธรรมชาติอัด NGV (กก.)", ef: 2.2609, unit: "kg" },
-  lpgL: { label: "LPG (ลิตร)", ef: 1.7306, unit: "L" },
-  lpgKg: { label: "LPG (กก.)", ef: 3.2049, unit: "kg" },
+  diesel: { label: "น้ำมันดีเซล (ลิตร)", ef: 2.7406, co2: 2.6987, unit: "L" },
+  gasoline: { label: "น้ำมันเบนซิน – ไม่ควบคุม (ลิตร)", ef: 2.2394, co2: 2.1816, unit: "L" },
+  gasolineCat: { label: "น้ำมันเบนซิน – มีตัวเร่งปฏิกิริยา (ลิตร)", ef: 2.2719, co2: 2.1816, unit: "L" },
+  cng: { label: "ก๊าซธรรมชาติอัด NGV (กก.)", ef: 2.2609, co2: 2.2609, unit: "kg" },
+  lpgL: { label: "LPG (ลิตร)", ef: 1.7306, co2: 1.7306, unit: "L" },
+  lpgKg: { label: "LPG (กก.)", ef: 3.2049, co2: 3.2049, unit: "kg" },
 } as const;
 export type TransportKey = keyof typeof TRANSPORT_FUELS;
 
@@ -164,8 +177,14 @@ export type TransportKey = keyof typeof TRANSPORT_FUELS;
 export const CARBON_FRACTION = 0.47; // IPCC default
 export const MAI_PER_TREE = 9.5; // kgCO2/ต้น/ปี (Option 1 นับจำนวนต้น)
 
-/** สัดส่วนรากต่อลำต้น (R) — IPCC 2006 Vol.4 Table 4.4 */
+/** สัดส่วนรากต่อลำต้น (R) — ทางเลือกที่ 1 ค่าที่ อบก. กำหนด [T-VER-S-TOOL-01-01 §5.1]
+ *  และทางเลือกที่ 2 IPCC 2006/2019 Vol.4 Table 4.4 */
 export const ROOT_RATIOS = {
+  tgoGeneral: { label: "อบก.: พรรณไม้ทั่วไป", value: 0.27 },
+  tgoMangrove: { label: "อบก.: โกงกาง", value: 0.48 },
+  tgoPalm: { label: "อบก.: ปาล์ม", value: 0.41 },
+  tgoBamboo: { label: "อบก.: ไผ่", value: 0.27 },
+  tgoClimber: { label: "อบก.: เถาวัลย์", value: 0.27 },
   moistDecid: { label: "ป่าเขตร้อนชื้นผลัดใบ (AGB < 125 t/ha)", value: 0.2 },
   moistDecidHigh: { label: "ป่าเขตร้อนชื้นผลัดใบ (AGB > 125 t/ha)", value: 0.24 },
   rainforest: { label: "ป่าดิบชื้นเขตร้อน", value: 0.37 },
@@ -175,10 +194,84 @@ export const ROOT_RATIOS = {
 } as const;
 export type RootKey = keyof typeof ROOT_RATIOS;
 
+/** สัดส่วนคาร์บอนในเนื้อไม้ (CF) ที่ อบก. กำหนด [T-VER-S-TOOL-01-01 §5.1] */
+export const CARBON_FRACTIONS = {
+  general: { label: "พรรณไม้ทั่วไป / ไผ่ / เถาวัลย์", value: 0.47 },
+  mangrove: { label: "โกงกาง", value: 0.4715 },
+  palm: { label: "ปาล์ม", value: 0.413 },
+} as const;
+
+/** ไม้ตาย (DF_DW) และเศษซากพืช (DF_LI) เป็นสัดส่วนของคาร์บอนต้นไม้ [T-VER-S-TOOL-01-03, AR-TOOL12] */
+export const DEADWOOD = {
+  none: { label: "ไม่ประเมิน", dw: 0, li: 0 },
+  lt1000: { label: "สูง < 2,000 ม. ฝน < 1,000 มม./ปี", dw: 0.02, li: 0.04 },
+  r1000: { label: "สูง < 2,000 ม. ฝน 1,000–1,600 มม./ปี", dw: 0.01, li: 0.01 },
+  gt1600: { label: "สูง < 2,000 ม. ฝน > 1,600 มม./ปี", dw: 0.06, li: 0.01 },
+  alt2000: { label: "สูงกว่า 2,000 ม. ทุกระดับฝน", dw: 0.07, li: 0.01 },
+} as const;
+export type DeadwoodKey = keyof typeof DEADWOOD;
+
+/* ---------- Soil carbon [T-VER-S-TOOL-01-02; IPCC 2019 Table 2.3, 5.5] ---------- */
+/** SOCref (tC/ha, 0–30 ซม.) เขตร้อน; ไทยส่วนใหญ่ T3 (ฝน 1,000–2,000 มม.) */
+export const SOC_REF = {
+  T3: { label: "เขตร้อนชื้น (Tropical moist, ฝน > 1,000 มม.)", HAC: 40, LAC: 38, SAN: 27, VOL: 70, WET: 68 },
+  T4: { label: "เขตร้อนแห้ง (Tropical dry, ฝน < 1,000 มม.)", HAC: 21, LAC: 19, SAN: 9, VOL: 50, WET: 22 },
+} as const;
+export type ClimateKey = keyof typeof SOC_REF;
+export const SOIL_CLASS = {
+  LAC: "ดินแร่ดินเหนียวกิจกรรมต่ำ (LAC) – ดินส่วนใหญ่ของไทย",
+  HAC: "ดินเหนียวกิจกรรมสูง (HAC) เช่น ดินเหนียวดำ",
+  SAN: "ดินทราย (SAN)",
+  WET: "ดินชุ่มน้ำ (WET)",
+  VOL: "ดินภูเขาไฟ (VOL)",
+} as const;
+export type SoilClassKey = keyof typeof SOIL_CLASS;
+/** [ค่าเขตร้อน แห้ง, ชื้น] */
+export const SOC_FLU = {
+  annual: { label: "ปลูกพืชล้มลุกต่อเนื่อง", v: [0.92, 0.83] },
+  paddy: { label: "นาข้าว (ขังน้ำ)", v: [1.35, 1.35] },
+  perennial: { label: "ไม้ยืนต้น/ไม้ผล", v: [1.01, 1.01] },
+  setAside: { label: "พักดิน/ปลูกหญ้า < 20 ปี", v: [0.93, 0.82] },
+} as const;
+export const SOC_FMG = {
+  full: { label: "ไถพรวนเต็มรูปแบบ", v: [1.0, 1.0] },
+  reduced: { label: "ไถพรวนลดลง (คลุมดิน ≥ 30%)", v: [0.99, 1.04] },
+  noTill: { label: "ไม่ไถพรวน", v: [1.04, 1.1] },
+} as const;
+export const SOC_FI = {
+  low: { label: "ต่ำ (เผา/ขนเศษพืชออก ไม่ใส่ปุ๋ย)", v: [0.95, 0.92] },
+  medium: { label: "ปานกลาง (คืนเศษพืชทั้งหมด)", v: [1.0, 1.0] },
+  high: { label: "สูง ไม่ใส่มูลสัตว์ (พืชคลุม ปุ๋ยพืชสด)", v: [1.04, 1.11] },
+  highManure: { label: "สูง และใส่มูลสัตว์สม่ำเสมอ", v: [1.37, 1.44] },
+} as const;
+export type FluKey = keyof typeof SOC_FLU;
+export type FmgKey = keyof typeof SOC_FMG;
+export type FiKey = keyof typeof SOC_FI;
+/** dSOC สูงสุด 0.8 tC/ha/ปี = 0.128 tC/ไร่/ปี; ช่วงปรับตัว 20 ปี [TOOL-01-02 ทางเลือก 2] */
+export const SOC_MAX_RATE_PER_RAI = 0.128;
+export const SOC_TRANSITION_YEARS = 20;
+
+/* ---------- การเผาชีวมวลในไม้ยืนต้น [TVER-13-06 §5.2.4] ---------- */
+export const COMF_PERENNIAL = 0.55; // ป่าเขตร้อน (IPCC 2019 Table 2.6) ตามค่าแนะนำใน 13-06
+
+/* ---------- ถ่านชีวภาพ [T-VER-P-METH-14-03] ---------- */
+export const BIOCHAR_FPERM = {
+  high: { label: "ไพโรไลซิส/แก๊สซิฟิเคชันอุณหภูมิสูง > 600 °C", value: 0.89 },
+  medium: { label: "ไพโรไลซิสอุณหภูมิปานกลาง 450–600 °C", value: 0.8 },
+  low: { label: "อุณหภูมิต่ำ 350–450 °C", value: 0.65 },
+} as const;
+export type FpermKey = keyof typeof BIOCHAR_FPERM;
+export const BIOCHAR_SMG = 0.03; // tCH4/t biochar (AMS-III.BG)
+export const BIOCHAR_F = 0.1; // สัดส่วนตามเทคโนโลยี (AMS-III.BG)
+
 /* ---------- T-VER specific ---------- */
 export const TVER = {
   RICE_CONSERVATIVENESS: 0.89, // CF applied to baseline CH4 [TVER-13-08]
   RICE_UNCERTAINTY_DEDUCTION: 0.15, // Method 3 (default values) [TVER-13-08]
   SIGNIFICANCE: 0.05, // fuel/burning counted if ≥ 5% of reductions
   MIN_N_REDUCTION: 0.05, // chemical N must fall ≥ 5% [13-05, 13-06, 13-08]
+  MAX_YIELD_DROP: 0.05, // ผลผลิตลดได้ไม่เกิน 5% [P-13-06 §6.2, P-13-08]
+  RICE_EF_BL_C_RAI: 0.1952, // kgCH4/ไร่/วัน = 1.22 kg/ha/d ÷ 6.25 [P-13-08 §10.1]
+  OM_LEAKAGE: 0.12, // รั่วไหล 12% ของคาร์บอนในวัสดุอินทรีย์จากภายนอก [P-13-06 §6.1]
+  UD_DEFAULT: 0.15, // ค่าปรับลดความไม่แน่นอน เมื่อใช้ค่าแนะนำ (Method 3) [P-13-08 §8]
 };

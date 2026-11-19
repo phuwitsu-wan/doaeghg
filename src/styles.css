@@ -331,3 +331,9 @@ pre.code { background: var(--indigo); color: #fff; padding: 1rem; border-radius:
 .credit-foot { margin-top: 2rem; padding-top: 1rem; border-top: 2px dashed var(--line); font-size: 0.85rem; color: var(--muted); line-height: 1.6; }
 .credit-foot p + p { margin-top: 0.4rem; }
 .credit-foot b { color: var(--ink); }
+
+/* ตารางพารามิเตอร์ T-VER */
+table.params { min-width: 760px; margin-top: 0.75rem; font-size: 0.875rem; }
+table.params td { vertical-align: top; }
+table.params tr.grp td { background: var(--indigo-soft); font-weight: 700; color: var(--indigo); }
+.q h4 { margin: 1rem 0 0.4rem; font-size: 1rem; }

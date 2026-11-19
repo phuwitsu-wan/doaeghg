@@ -1,4 +1,5 @@
-import type { Evaluation } from "@/lib/engine/evaluate";
+import { Fragment } from "react";
+import type { Evaluation, TverResult } from "@/lib/engine/evaluate";
 import type { FieldRecord, ScenarioResult, Settings, SourceLine } from "@/lib/engine/types";
 import { assess, LEVEL_RULE, LEVEL_TEXT, levelSentence, yieldIssue, type Assessment } from "@/lib/benchmark";
 import { co2, co2s, fmt } from "@/lib/format";
@@ -159,7 +160,7 @@ export function Report({ ev, rec, settings }: { ev: Evaluation; rec: FieldRecord
               <table style={{ marginTop: "0.5rem" }}>
                 <thead><tr><th>รายการ (ทั้งแปลง)</th><th className="r">ปีฐาน</th><th className="r">ปีที่วัด</th></tr></thead>
                 <tbody>
-                  {([["มวลชีวภาพเหนือดิน", "agbKg"], ["มวลชีวภาพในราก", "bgbKg"], ["คาร์บอน", "carbonKg"], ["คิดเป็น CO₂", "co2Kg"]] as const).map(([l, k]) => (
+                  {([["มวลชีวภาพเหนือดิน", "agbKg"], ["มวลชีวภาพในราก", "bgbKg"], ...(rec.trees.deadwood && rec.trees.deadwood !== "none" ? [["คาร์บอนไม้ตาย/เศษซาก", "deadKg"] as const] : []), ["คาร์บอน", "carbonKg"], ["คิดเป็น CO₂", "co2Kg"]] as const).map(([l, k]) => (
                     <tr key={k}><td>{l}</td><td className="r">{fmt((ev.trees!.baseline?.[k] ?? 0) / 1000, 2)} ตัน</td><td className="r">{fmt((ev.trees!.current?.[k] ?? 0) / 1000, 2)} ตัน</td></tr>
                   ))}
                 </tbody>
@@ -170,24 +171,18 @@ export function Report({ ev, rec, settings }: { ev: Evaluation; rec: FieldRecord
         </section>
       )}
 
-      {ev.tver && (
+      {ev.soil && (
         <section>
-          <h2>คาร์บอนเครดิต T-VER (ประมาณการ)</h2>
-          <p className="muted small">ระเบียบวิธี {ev.tver.method} ใช้คัดกรองและวางแผนเบื้องต้น การขอรับรองจริงต้องผ่านผู้ประเมินภายนอกและ อบก.</p>
-          <table style={{ maxWidth: 560, marginTop: "0.5rem" }}>
-            <tbody>
-              {ev.tver.steps.map((s) => <tr key={s.label}><td>{s.label}</td><td className="r">{fmt(s.value, 2)}</td></tr>)}
-              <tr className="total"><td>เครดิตที่ขอรับรองได้ (kgCO₂e)</td><td className="r">{fmt(ev.tver.creditKgCO2e, 2)}</td></tr>
-            </tbody>
-          </table>
-          <ul className="checks">
-            {ev.tver.checks.map((c) => <li key={c.text}><span className={c.ok ? "ok" : "no"}>{c.ok ? "ผ่าน" : "ไม่ผ่าน"}</span><span>{c.text}</span></li>)}
-          </ul>
-          <details className="more"><summary>ข้อกำหนดและสมมติฐานของระเบียบวิธี</summary>
-            <ul className="small muted" style={{ paddingLeft: "1.2rem" }}>{ev.tver.notes.map((n) => <li key={n}>{n}</li>)}</ul>
-          </details>
+          <h2>คาร์บอนในดิน</h2>
+          <p className="headline">
+            SOC {fmt(ev.soil.soc0PerRai, 2)} → {fmt(ev.soil.soctPerRai, 2)} tC/ไร่ เพิ่มขึ้น <b className="num">{co2s(ev.soil.deltaKgCO2)}</b>
+            <span className="muted"> ในช่วง {ev.soil.years} ปี ({ev.soil.method === "sample" ? "เก็บตัวอย่างดิน" : "ค่าอ้างอิง IPCC"})</span>
+          </p>
         </section>
       )}
+
+      {ev.tver && <TverBlock r={ev.tver} />}
+      {ev.extras.map((x) => <TverBlock key={x.method} r={x} />)}
 
       <section>
         <details className="more" open={false}>
@@ -266,5 +261,49 @@ function Gauge({ ratio }: { ratio: number }) {
       <span className="ref" style={{ left: "0%", transform: "none" }}>0</span>
       <span className="ref" style={{ left: "100%", transform: "translateX(-100%)" }}>3 เท่า</span>
     </div>
+  );
+}
+
+/** ผลคาร์บอนเครดิต 1 ระเบียบวิธี + ตารางพารามิเตอร์สำหรับบันทึกตามมาตรฐาน */
+function TverBlock({ r }: { r: TverResult }) {
+  const show = (v: string | number | null) => (v == null ? "" : typeof v === "number" ? fmt(v, Number.isInteger(v) ? 0 : Math.abs(v) < 10 ? 4 : 2) : v);
+  return (
+    <section>
+      <h2>คาร์บอนเครดิต T-VER (ประมาณการ)</h2>
+      <p><b>{r.method}</b> {r.title}</p>
+      <p className="muted small">สมการ: {r.equation} — ใช้คัดกรองและเตรียมข้อมูลเบื้องต้น การขอรับรองจริงต้องผ่านผู้ประเมินภายนอก (VVB) และ อบก.</p>
+      <table style={{ maxWidth: 640, marginTop: "0.5rem" }}>
+        <thead><tr><th>องค์ประกอบ</th><th className="r">kgCO₂e</th><th className="r">tCO₂e</th></tr></thead>
+        <tbody>
+          {r.steps.map((s) => <tr key={s.label}><td>{s.label}</td><td className="r">{fmt(s.value, 2)}</td><td className="r">{fmt(s.value / 1000, 3)}</td></tr>)}
+          <tr className="total"><td>เครดิตที่ขอรับรองได้</td><td className="r">{fmt(r.creditKgCO2e, 2)}</td><td className="r">{fmt(r.creditKgCO2e / 1000, 3)}</td></tr>
+          {r.periodYears !== 1 && <tr><td>เฉลี่ยต่อปี ({r.periodYears} ปี)</td><td className="r">{fmt(r.perYearKgCO2e, 2)}</td><td className="r">{fmt(r.perYearKgCO2e / 1000, 3)}</td></tr>}
+        </tbody>
+      </table>
+      <ul className="checks">
+        {r.checks.map((c) => <li key={c.text}><span className={c.ok ? "ok" : "no"}>{c.ok ? "ผ่าน" : "ไม่ผ่าน"}</span><span>{c.text}</span></li>)}
+      </ul>
+      <details className="more"><summary>ข้อกำหนดและสมมติฐานของระเบียบวิธี</summary>
+        <ul className="small muted" style={{ paddingLeft: "1.2rem" }}>{r.notes.map((n) => <li key={n}>{n}</li>)}</ul>
+      </details>
+      <details className="more"><summary>ตารางพารามิเตอร์สำหรับบันทึกตามมาตรฐาน (PDD / รายงานติดตามผล)</summary>
+        <div style={{ overflowX: "auto" }}>
+          <table className="params">
+            <thead><tr><th>พารามิเตอร์</th><th>ความหมาย</th><th>หน่วย</th><th className="r">กรณีฐาน</th><th className="r">กรณีโครงการ</th><th>แหล่งข้อมูล / วิธีติดตามผล</th></tr></thead>
+            <tbody>
+              {(["ต้องติดตามผล", "ไม่ต้องติดตามผล (ค่าคงที่)"] as const).map((g, gi) => (
+                <Fragment key={g}>
+                  <tr className="grp"><td colSpan={6}>{g}</td></tr>
+                  {r.params.filter((p) => p.monitored === (gi === 0)).map((p) => (
+                    <tr key={p.sym + p.desc}><td><b>{p.sym}</b></td><td>{p.desc}</td><td>{p.unit}</td><td className="r">{show(p.bl)}</td><td className="r">{show(p.pj)}</td><td className="small">{p.source}</td></tr>
+                  ))}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="small muted">ดาวน์โหลด Excel เพื่อได้ชีต "T-VER" ที่มีตารางนี้ครบ ใช้กรอกเอกสารข้อเสนอโครงการและรายงานการติดตามผลตามแบบของ อบก.</p>
+      </details>
+    </section>
   );
 }

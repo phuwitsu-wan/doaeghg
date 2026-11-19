@@ -1,5 +1,5 @@
 import {
-  BURN, CFOA, EF_C_RICE, EF_DOLOMITE, EF_LIMESTONE, EF_UREA, ELEC_EF, FUELS, GWP_SETS, HA_PER_RAI, N2O,
+  BURN, CFOA, COMF_PERENNIAL, EF_C_RICE, EF_DOLOMITE, EF_LIMESTONE, EF_UREA, ELEC_EF, FUELS, GWP_SETS, HA_PER_RAI, N2O,
   RESIDUES, SF_P, SF_W, TRANSPORT_FUELS,
 } from "./factors";
 import type { CropGroup, ScenarioResult, Scenario, Settings, SourceLine, Standard } from "./types";
@@ -99,20 +99,26 @@ export function calcScenario(s: Scenario, crop: CropGroup, standard: Standard, s
   // T-VER (13-05, 13-06, 13-08) คิด N2O จาก FSN + FON เท่านั้น
   const FCR = standard === "tver" ? 0 : FCR_raw;
 
+  // ไม้ยืนต้นภายใต้ T-VER 13-06 ใช้ COMF 0.55 (§5.2.4); อื่น ๆ ใช้ Cf เศษวัสดุ 0.8 (IPCC Table 2.6)
+  const tree = crop === "fruit" || crop === "forest";
+  const burnCf = standard === "tver" && tree ? COMF_PERENNIAL : BURN.CF;
   if (burnedRai > 0 && remainPerRai > 0) {
-    const ch4 = burningGas(burnedRai, remainPerRai, BURN.EF_CH4);
-    const n2o = burningGas(burnedRai, remainPerRai, BURN.EF_N2O);
-    push({ key: "fireCH4", label: "CH₄ จากการเผาเศษวัสดุ", group: "fire", gas: "CH4", mass: ch4, kgCO2e: ch4 * G.CH4, eq: "Eq.1.1" });
-    push({ key: "fireN2O", label: "N₂O จากการเผาเศษวัสดุ", group: "fire", gas: "N2O", mass: n2o, kgCO2e: n2o * G.N2O, eq: "Eq.1.2" });
+    const ch4 = burningGas(burnedRai, remainPerRai, BURN.EF_CH4, burnCf);
+    const n2o = burningGas(burnedRai, remainPerRai, BURN.EF_N2O, burnCf);
+    const tag = burnCf === BURN.CF ? "" : ` COMF ${burnCf}`;
+    push({ key: "fireCH4", label: "CH₄ จากการเผาเศษวัสดุ", group: "fire", gas: "CH4", mass: ch4, kgCO2e: ch4 * G.CH4, eq: `Eq.1.1${tag}` });
+    push({ key: "fireN2O", label: "N₂O จากการเผาเศษวัสดุ", group: "fire", gas: "N2O", mass: n2o, kgCO2e: n2o * G.N2O, eq: `Eq.1.2${tag}` });
   }
 
   /* --- มีเทนจากนาข้าว --- */
+  let riceAct: ScenarioResult["activity"]["rice"];
   if (crop === "rice") {
     const r = s.rice;
     const sfw = SF_W[r.waterRegime]?.value ?? 1;
     const sfp = SF_P[r.preSeason]?.value ?? 1;
     const so = sfo(r.organics);
     const ef = EF_C_RICE * sfw * sfp * so;
+    riceAct = { harvestedRai: num(r.harvestedAreaRai), days: num(r.days), sfw, sfp, sfo: so, efDaily: ef };
     const ch4 = riceCH4(ef, num(r.days), num(r.harvestedAreaRai));
     push({ key: "riceCH4", label: "CH₄ จากการปลูกข้าว", group: "rice", gas: "CH4", mass: ch4, kgCO2e: ch4 * G.CH4,
       eq: `Eq.2 (EF=${ef.toFixed(3)} = 1.22×${sfw}×${sfp}×${so.toFixed(3)})` });
@@ -136,22 +142,40 @@ export function calcScenario(s: Scenario, crop: CropGroup, standard: Standard, s
   push({ key: "lime", label: "CO₂ จากปูนขาว/โดโลไมต์", group: "co2soil", gas: "CO2", mass: l, kgCO2e: l, eq: "Eq.7" });
 
   /* --- พลังงาน --- */
+  // T-VER: CO2 เท่านั้น = FC × NCV × EF_CO2 (ไม่รวม CH4/N2O จากการเผาไหม้)
+  const tv = standard === "tver";
   let fuelKg = 0;
   let elecKg = 0;
+  let dieselL = 0;
+  let gasolineL = 0;
+  let kwh = 0;
   const efE = elecEF(settings);
   for (const m of s.machines) {
     if (m.fuel === "electric") {
       elecKg += num(m.kwh) * efE;
+      kwh += num(m.kwh);
     } else {
       const liters = m.mode === "liters" ? num(m.liters) : num(m.hoursPerRai) * Math.max(1, num(m.times)) * num(m.lph) * A;
-      fuelKg += liters * (FUELS[m.fuel]?.efPerL ?? FUELS.diesel.efPerL);
+      const f = FUELS[m.fuel] ?? FUELS.diesel;
+      fuelKg += liters * (tv ? f.co2PerL : f.efPerL);
+      if (m.fuel === "diesel") dieselL += liters; else gasolineL += liters;
     }
   }
-  push({ key: "fuel", label: "การเผาไหม้น้ำมันของเครื่องจักรกลเกษตร", group: "energy", gas: "mix", kgCO2e: fuelKg, eq: "Eq.8" });
+  push({ key: "fuel", label: "การเผาไหม้น้ำมันของเครื่องจักรกลเกษตร", group: "energy", gas: tv ? "CO2" : "mix", kgCO2e: fuelKg,
+    eq: tv ? "FC×NCV×EF_CO2 (ดีเซล 2.6987, เบนซิน 2.1816 kgCO₂/L)" : "Eq.8" });
   push({ key: "elec", label: "การใช้ไฟฟ้า (เช่น สูบน้ำ)", group: "energy", gas: "CO2", kgCO2e: elecKg, eq: `Eq.9 (${efE} kgCO₂e/kWh)` });
   let trKg = 0;
-  for (const t of s.transports) trKg += transportLiters(t) * (TRANSPORT_FUELS[t.fuel]?.ef ?? 0);
-  push({ key: "transport", label: "การขนส่ง (ฟาง/ใบอ้อย/ผลผลิต)", group: "energy", gas: "mix", kgCO2e: trKg, eq: "Eq.10" });
+  let otherFuelKgCO2 = 0;
+  for (const t of s.transports) {
+    const L = transportLiters(t);
+    const tf = TRANSPORT_FUELS[t.fuel];
+    const kg = L * (tf ? (tv ? tf.co2 : tf.ef) : 0);
+    trKg += kg;
+    if (t.fuel === "diesel") dieselL += L;
+    else if (t.fuel === "gasoline" || t.fuel === "gasolineCat") gasolineL += L;
+    else otherFuelKgCO2 += kg;
+  }
+  push({ key: "transport", label: "การขนส่ง (ฟาง/ใบอ้อย/ผลผลิต)", group: "energy", gas: tv ? "CO2" : "mix", kgCO2e: trKg, eq: tv ? "FC×NCV×EF_CO2" : "Eq.10" });
 
   const total = lines.reduce((x, y) => x + y.kgCO2e, 0);
   const byGas = { CO2: 0, CH4: 0, N2O: 0 };
@@ -169,6 +193,11 @@ export function calcScenario(s: Scenario, crop: CropGroup, standard: Standard, s
     perKgProduct: yieldTotal > 0 ? total / yieldTotal : null,
     byGas,
     nInputs: { FSN, FON, FCR: FCR_raw },
+    activity: {
+      dieselL, gasolineL, otherFuelKgCO2, kwh, ureaKg,
+      limestoneKg: num(s.limestoneKgPerRai) * A, dolomiteKg: num(s.dolomiteKgPerRai) * A,
+      burnedRai, burnedDmKg: burnedRai * remainPerRai, burnCf, rice: riceAct,
+    },
     warnings,
   };
 }

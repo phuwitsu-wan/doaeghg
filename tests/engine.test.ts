@@ -110,7 +110,7 @@ describe("ต้นไม้ (T-VER Tool)", () => {
     const x = 400 * 15;
     expect(b.ws).toBeCloseTo(0.0396 * Math.pow(x, 0.933), 9);
     expect(b.wb).toBeCloseTo(0.00349 * Math.pow(x, 1.03), 9);
-    expect(b.wl).toBeCloseTo(1 / (28 / (b.ws + b.wb) + 0.025), 9);
+    expect(b.wl).toBeCloseTo(1000 / (28 / ((b.ws + b.wb) / 1000) + 0.025), 9); // หน่วยตันตาม Ogawa
   });
   it("การกักเก็บที่เพิ่มขึ้น และขยายผลจากแปลงตัวอย่าง", () => {
     const rec = newRecord("forest");
@@ -119,7 +119,7 @@ describe("ต้นไม้ (T-VER Tool)", () => {
     rec.trees.years = 5;
     const r = calcTrees(rec.trees, 4);
     const agb = treeBiomass("general", 20, 15).wt * 10 * 4;
-    expect(r.removalKgCO2).toBeCloseTo(agb * 1.2 * 0.47 * 44 / 12, 6);
+    expect(r.removalKgCO2).toBeCloseTo(agb * 1.27 * 0.47 * 44 / 12, 6); // R อบก. 0.27
     expect(r.current!.smallTrees).toBe(5);
     expect(r.annualKgCO2).toBeCloseTo(r.removalKgCO2 / 5, 9);
   });
@@ -160,5 +160,74 @@ describe("แรงม้ารถแทรกเตอร์", async () => {
   it("แบ่งกลุ่มตามคู่มือ MRV", () => {
     expect([tractorClass(15), tractorClass(21), tractorClass(45), tractorClass(46), tractorClass(75), tractorClass(76)])
       .toEqual(["tractorXS", "tractorS", "tractorS", "tractorM", "tractorM", "tractorL"]);
+  });
+});
+
+describe("เทียบค่าอ้างอิง: ตรวจหน่วยผลผลิต", async () => {
+  const { assess, yieldIssue, ratioText } = await import("../src/lib/benchmark");
+  const mk = (yieldKg: number) => {
+    const rec = newRecord("field");
+    rec.cropName = "อ้อย";
+    rec.baseline.areaRai = 2;
+    rec.baseline.yieldKgPerRai = yieldKg;
+    rec.baseline.chemFerts = [{ id: "a", round: 1, formula: "46-0-0", kgPerRai: 50 }];
+    rec.baseline.machines = [{ id: "m", stage: "เตรียมดิน", machine: "tractorL", fuel: "diesel", mode: "hours", hoursPerRai: 2, times: 2, lph: 23.4, liters: 0, kwh: 0 }];
+    return rec;
+  };
+  it("กรอก 12.5 (ตั้งใจเป็นตัน) ในช่อง กก. → เตือน และไม่เทียบระดับ", () => {
+    const rec = mk(12.5);
+    expect(yieldIssue("อ้อย", 12.5)).toMatch(/ต่ำผิดปกติ/);
+    expect(assess(rec, evaluate(rec, DEFAULT_SETTINGS), DEFAULT_SETTINGS)).toBeNull();
+  });
+  it("กรอก 12.5 ตัน/ไร่ (12,500 กก.) → เทียบได้ค่าสมเหตุสมผล", () => {
+    const rec = mk(12500);
+    const ev = evaluate(rec, DEFAULT_SETTINGS);
+    const a = assess(rec, ev, DEFAULT_SETTINGS)!;
+    expect(a).not.toBeNull();
+    expect(a.value).toBeCloseTo(ev.baseline.totalKgCO2e / 25000, 9);
+    expect(a.value).toBeLessThan(0.5);
+  });
+  it("แสดงผลเกิน 3 เท่าเป็นจำนวนเท่า", () => {
+    expect(ratioText(1.17)).toBe("117% ของค่าอ้างอิง");
+    expect(ratioText(21.8)).toBe("21.8 เท่าของค่าอ้างอิง");
+  });
+});
+
+describe("เครื่องจักรตรงกับชนิดพืช", async () => {
+  const { machinesFor, MACHINE_DEFS } = await import("../src/lib/machines");
+  const all = (crop: any, name: string, pm?: string) =>
+    (["เตรียมดิน", "ปลูก", "สูบน้ำ", "ใส่ปุ๋ย/ฉีดพ่น/ดูแล", "เก็บเกี่ยว", "จัดการเศษวัสดุ"] as const).flatMap((st) => machinesFor(crop, name, st, pm));
+  it("ข้าวไม่มีรถตัดอ้อย / รถคีบอ้อย", () => {
+    const r = all("rice", "ข้าวนาปี");
+    expect(r).not.toContain("caneHarvester"); expect(r).not.toContain("caneLoader");
+    expect(machinesFor("rice", "ข้าวนาปี", "เก็บเกี่ยว")).toEqual(["combine"]);
+  });
+  it("อ้อยไม่มีรถดำนาหรือรถเกี่ยวนวดข้าว และมีรถตีใบ รถคีบ", () => {
+    const c = all("field", "อ้อย");
+    for (const x of ["transplanterWalk", "transplanterRide", "combine"]) expect(c).not.toContain(x);
+    expect(machinesFor("field", "อ้อย", "เก็บเกี่ยว")).toEqual(["caneHarvester", "leafStripper", "caneLoader"]);
+  });
+  it("ข้าวหว่านมีเครื่องพ่นเมล็ดและโดรน; ปักดำด้วยแรงงานไม่มีเครื่องจักร", () => {
+    expect(machinesFor("rice", "ข้าวนาปี", "ปลูก", "wetBroadcast")).toEqual(expect.arrayContaining(["seedBlower", "droneSeed"]));
+    expect(machinesFor("rice", "ข้าวนาปี", "ปลูก", "transplant")).toEqual([]);
+  });
+  it("มันสำปะหลังเก็บเกี่ยวด้วยไถขุดมัน, ข้าวโพดด้วยรถเก็บเกี่ยวข้าวโพด", () => {
+    expect(machinesFor("field", "มันสำปะหลัง", "เก็บเกี่ยว")).toEqual(["cassavaDigger"]);
+    expect(machinesFor("field", "ข้าวโพดเลี้ยงสัตว์", "เก็บเกี่ยว")).toEqual(["cornHarvester"]);
+  });
+  it("รถตีใบ 25 แรงม้า อยู่กลุ่ม 21–45 แรงม้า (8.4 ลิตร/ชม. ตามคู่มือ MRV)", () => {
+    expect(MACHINE_DEFS.leafStripper.hp).toBe(25);
+    expect(MACHINE_DEFS.caneLoader.lph).toBe(3);
+  });
+});
+
+describe("การขนส่งตามระยะทาง", async () => {
+  const { transportLiters, calcScenario } = await import("../src/lib/engine/calc");
+  it("10 ล้อ 30 กม. ไป-กลับ 4 เที่ยว 3.75 กม./ลิตร = 64 ลิตร", () => {
+    const t = { id: "t", desc: "", fuel: "diesel" as const, amount: 0, mode: "distance" as const, km: 30, trips: 4, kmPerL: 3.75, roundTrip: true };
+    expect(transportLiters(t)).toBeCloseTo(64, 9);
+    expect(transportLiters({ ...t, roundTrip: false })).toBeCloseTo(32, 9);
+    const s = emptyScenario("field"); s.areaRai = 1; s.transports = [t];
+    expect(calcScenario(s, "field", "mrv", DEFAULT_SETTINGS).lines.find((l) => l.key === "transport")!.kgCO2e).toBeCloseTo(64 * 2.7406, 6);
   });
 });

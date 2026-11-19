@@ -11,8 +11,9 @@ import { exportXlsx } from "@/lib/exportXlsx";
 import { getProfile, logEvent } from "@/lib/profile";
 import { assess } from "@/lib/benchmark";
 import { CropCtx, FertStep, HarvestStep, PlantStep, PlotStep, PrepStep, TreeStep } from "./steps";
+import { CreditStep } from "./credit";
 
-type StepKey = "plot" | "prep" | "plant" | "fert" | "harvest" | "trees" | "care" | "residue" | "result";
+type StepKey = "plot" | "prep" | "plant" | "fert" | "harvest" | "trees" | "care" | "residue" | "credit" | "result";
 const STEP_INFO: Record<StepKey, { name: string; title: string; lead: string; scenario: boolean }> = {
   plot: { name: "แปลง", title: "ข้อมูลแปลง", lead: "ใครเป็นเจ้าของ แปลงใหญ่แค่ไหน และต้องการคำนวณแบบไหน", scenario: false },
   prep: { name: "เตรียมดิน", title: "การเตรียมดิน", lead: "ไถ พรวน และปรับสภาพดินก่อนปลูก", scenario: true },
@@ -22,6 +23,7 @@ const STEP_INFO: Record<StepKey, { name: string; title: string; lead: string; sc
   trees: { name: "ต้นไม้", title: "ต้นไม้ในแปลง", lead: "ใช้คำนวณคาร์บอนที่ต้นไม้กักเก็บไว้", scenario: false },
   care: { name: "ดูแลแปลง", title: "ปุ๋ยและการดูแลแปลง", lead: "ปุ๋ย ปูน และเครื่องจักรที่ใช้ดูแลในรอบปี", scenario: true },
   residue: { name: "เศษกิ่งใบ", title: "เศษกิ่ง ใบ และการขนส่ง", lead: "การจัดการเศษกิ่งใบที่ตัดแต่ง และการขนส่งผลผลิต", scenario: true },
+  credit: { name: "คาร์บอนเครดิต", title: "ข้อมูลเพิ่มเติมสำหรับคาร์บอนเครดิต T-VER", lead: "เลือกระเบียบวิธี เอกสาร คาร์บอนในดิน และถ่านชีวภาพ ตามระเบียบและเครื่องมือของ อบก.", scenario: false },
   result: { name: "ผลลัพธ์", title: "ผลการคำนวณ", lead: "", scenario: false },
 };
 
@@ -68,7 +70,11 @@ export function Record({ id }: { id: string }) {
   }
 
   const isTree = rec.crop === "fruit" || rec.crop === "forest";
-  const steps: StepKey[] = isTree ? ["plot", "trees", "care", "residue", "result"] : ["plot", "prep", "plant", "fert", "harvest", "result"];
+  const steps: StepKey[] = [
+    ...(isTree ? (["plot", "trees", "care", "residue"] as StepKey[]) : (["plot", "prep", "plant", "fert", "harvest"] as StepKey[])),
+    ...(rec.standard === "tver" ? (["credit"] as StepKey[]) : []),
+    "result",
+  ];
   const cur = steps[Math.min(step, steps.length - 1)];
   const info = STEP_INFO[cur];
   const v = rec.hasProject && info.scenario ? view : "baseline";
@@ -144,6 +150,7 @@ export function Record({ id }: { id: string }) {
           {cur === "trees" && <TreeStep t={rec.trees} upd={updT} />}
           {cur === "care" && <FertStep key={v} s={s} upd={updS} care />}
           {cur === "residue" && <HarvestStep key={v} s={s} upd={updS} crop={rec.crop} />}
+          {cur === "credit" && <CreditStep rec={rec} upd={update} />}
           </CropCtx.Provider>
           {cur === "result" && (
             <>

@@ -1,4 +1,4 @@
-import type { Evaluation } from "./engine/evaluate";
+import { methodFor, type Evaluation, type TverResult } from "./engine/evaluate";
 import { CFOA, FUELS, MACHINES, ORGANIC_FERTS, RESIDUES, SF_P, SF_W, TRANSPORT_FUELS } from "./engine/factors";
 import { elecEF, gwp, transportLiters } from "./engine/calc";
 import { RICE_PLANT_METHODS, VEHICLES } from "./machines";
@@ -114,13 +114,59 @@ export function exportXlsx(items: { rec: FieldRecord; ev: Evaluation }[], settin
       b.add([`T-VER ${ev.tver.method}`], "title");
       ev.tver.steps.forEach((s) => b.add([s.label, "", "", r2(s.value)]));
       b.add(["เครดิตที่ขอรับรองได้ (kgCO2e)", "", "", r2(ev.tver.creditKgCO2e)], "bold");
-      ev.tver.checks.forEach((c) => b.add([`${c.ok ? "ผ่าน" : "ไม่ผ่าน"}: ${c.text}`]));
+      b.add(["ดูตารางพารามิเตอร์ครบในชีต T-VER"]);
     }
     sheets.push(b.done());
+    if (ev.tver) sheets.push(tverSheet(rec, ev, i + 1, settings));
   });
 
   if (profile) sheets.push(profileSheet(profile));
   downloadBytes(buildXlsx(sheets), filename, XLSX_MIME);
+}
+
+/** ชีตสำหรับบันทึกตามมาตรฐาน T-VER: ผลการคำนวณ เงื่อนไข และพารามิเตอร์ (ติดตามผล / ค่าคงที่) */
+function tverSheet(rec: FieldRecord, ev: Evaluation, n: number, settings: Settings): Sheet {
+  const b = new SheetBuilder(`T-VER ${n} ${rec.info.plotName || rec.cropName}`, [30, 46, 16, 16, 16, 46]);
+  const m = methodFor(rec);
+  b.add([`ข้อมูลสำหรับบันทึกตามมาตรฐาน T-VER — ${rec.info.plotName || rec.cropName}`], "title");
+  b.add(["ระเบียบวิธี", `${m.code} ${m.title}`]);
+  b.add(["เจ้าของแปลง", rec.info.farmer]);
+  b.add(["ที่ตั้ง", [rec.info.subdistrict && `ต.${rec.info.subdistrict}`, rec.info.district && `อ.${rec.info.district}`, rec.info.province && `จ.${rec.info.province}`].filter(Boolean).join(" ")]);
+  b.add(["พิกัด", rec.info.lat ? `${rec.info.lat}, ${rec.info.lng}` : "-"]);
+  b.add(["ชนิดพืช / ฤดูกาล", `${CROP_GROUPS[rec.crop].label} (${rec.cropName}) / ${rec.info.season}`]);
+  b.add(["GWP", `${settings.gwp}`]);
+  b.gap();
+  const block = (r: TverResult) => {
+    b.add([`${r.method} — ${r.title}`], "title");
+    b.add(["สมการ", r.equation]);
+    b.add(["องค์ประกอบ", "", "kgCO2e", "tCO2e"], "head");
+    r.steps.forEach((s) => b.add([s.label, "", r2(s.value), r2(s.value / 1000, 4)]));
+    b.add(["เครดิตที่ขอรับรองได้", "", r2(r.creditKgCO2e), r2(r.creditKgCO2e / 1000, 4)], "bold");
+    if (r.periodYears !== 1) b.add([`เฉลี่ยต่อปี (${r.periodYears} ปี)`, "", r2(r.perYearKgCO2e), r2(r.perYearKgCO2e / 1000, 4)]);
+    b.gap();
+    b.add(["เงื่อนไข", "ผล"], "head");
+    r.checks.forEach((c) => b.add([c.text, c.ok ? "ผ่าน" : "ไม่ผ่าน"]));
+    b.gap();
+    b.add(["หมายเหตุ / สมมติฐาน"], "head");
+    r.notes.forEach((x) => b.add([x]));
+    b.gap();
+    for (const mon of [true, false]) {
+      b.add([mon ? "พารามิเตอร์ที่ต้องติดตามผล" : "พารามิเตอร์ที่ไม่ต้องติดตามผล (ค่าคงที่)"], "title");
+      b.add(["พารามิเตอร์", "ความหมาย", "หน่วย", "กรณีฐาน", "กรณีโครงการ", "แหล่งข้อมูล / วิธีติดตามผล"], "head");
+      r.params.filter((p) => p.monitored === mon).forEach((p) => b.add([p.sym, p.desc, p.unit, p.bl, p.pj, p.source]));
+      b.gap();
+    }
+  };
+  if (ev.tver) block(ev.tver);
+  ev.extras.forEach(block);
+  if (rec.soil?.enabled && rec.soil.method === "sample") {
+    b.add(["ข้อมูลตัวอย่างดิน"], "title");
+    b.add(["ช่วง", "จุดที่", "OC (%)", "BD (g/cm³)", "ความลึก (ซม.)", "SOC (tC/ไร่)"], "head");
+    for (const [lbl, rows] of [["ก่อนเริ่มโครงการ", rec.soil.baseline], ["ปีที่ติดตามผล", rec.soil.current]] as const) {
+      rows.forEach((x, i) => b.add([lbl, i + 1, x.socPct, x.bd, x.depthCm, r2(x.socPct * x.bd * x.depthCm * 0.16, 4)]));
+    }
+  }
+  return b.done();
 }
 
 function profileSheet(p: Profile): Sheet {

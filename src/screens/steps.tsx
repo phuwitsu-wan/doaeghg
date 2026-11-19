@@ -1,6 +1,6 @@
 import { createContext, useContext, useState } from "react";
 import { CFOA, FUELS, MACHINES, ORGANIC_FERTS, RESIDUES, ROOT_RATIOS, SF_P, SF_W, TRANSPORT_FUELS, type CFOAKey, type MachineKey, type RootKey, type SFpKey, type SFwKey, type TransportKey } from "@/lib/engine/factors";
-import { ALLOMETRIC, treeBiomass } from "@/lib/engine/trees";
+import { ALLOMETRIC, countable, eqOf, treeBiomass } from "@/lib/engine/trees";
 import { nPctFromFormula, transportLiters } from "@/lib/engine/calc";
 import type { CropGroup, FieldRecord, MachineUse, Scenario, TransportUse, TreeInventory, TreeRow } from "@/lib/engine/types";
 import { CROP_NAMES, uid } from "@/lib/defaults";
@@ -447,17 +447,18 @@ export function HarvestStep({ s, upd, crop }: { s: Scenario; upd: UpdS; crop: Cr
 /* ====================== ต้นไม้ ====================== */
 function TreeRows({ rows, which, upd, eq }: { rows: TreeRow[]; which: "baseline" | "current"; upd: (fn: (t: TreeInventory) => void) => void; eq: string }) {
   const set = (id: string, p: Partial<TreeRow>) => upd((t) => { const r = t[which].find((x) => x.id === id); if (r) Object.assign(r, p); });
+  const e = eqOf(eq);
   return (
     <div>
       {rows.map((r, i) => {
-        const small = !(r.dbh >= 4.5) || !(r.height > 1.3);
+        const small = !countable(eq, r.dbh, r.height);
         const w = treeBiomass(eq, r.dbh, r.height).wt;
         return (
           <Item key={r.id} title={<>กลุ่มที่ {i + 1} <span className={small && (r.dbh || r.height) ? "small" : "muted small"} style={small && (r.dbh || r.height) ? { color: "var(--ember)" } : undefined}>
             {small ? (r.dbh || r.height ? "เล็กกว่าเกณฑ์ ไม่นับ" : "") : `${fmt1(w)} กก./ต้น`}</span></>}
             onRemove={() => upd((t) => { t[which] = t[which].filter((x) => x.id !== r.id); })}>
-            <div className="field"><label>เส้นผ่านศูนย์กลางที่ 1.3 ม.</label><div className="box"><NumInput label="DBH" value={r.dbh} onChange={(v) => set(r.id, { dbh: v })} /><span className="unit">ซม.</span></div></div>
-            <div className="field"><label>ความสูง</label><div className="box"><NumInput label="ความสูง" value={r.height} onChange={(v) => set(r.id, { height: v })} /><span className="unit">ม.</span></div></div>
+            {e.d !== "none" && <div className="field"><label>{e.d === "d0" ? "เส้นผ่านศูนย์กลางชิดดิน (D0)" : "เส้นผ่านศูนย์กลางที่ 1.3 ม."}</label><div className="box"><NumInput label="DBH" value={r.dbh} onChange={(v) => set(r.id, { dbh: v })} /><span className="unit">ซม.</span></div></div>}
+            <div className="field"><label>{e.h ? "ความสูง" : "ความสูง (ใช้ตรวจนิยามต้นไม้)"}</label><div className="box"><NumInput label="ความสูง" value={r.height} onChange={(v) => set(r.id, { height: v })} /><span className="unit">ม.</span></div></div>
             <div className="field"><label>จำนวนต้นขนาดนี้</label><div className="box"><NumInput label="จำนวนต้น" value={r.count} onChange={(v) => set(r.id, { count: Math.round(v) })} /><span className="unit">ต้น</span></div></div>
           </Item>
         );
@@ -486,6 +487,10 @@ export function TreeStep({ t, upd }: { t: TreeInventory; upd: (fn: (t: TreeInven
         </Q>
       ) : (
         <>
+          <Q title="ชนิดต้นไม้" help="เลือกสมการตามชนิดไม้ที่ อบก. แนะนำ (T-VER-S-TOOL-01-01 ภาคผนวกที่ 2) ระบบจะตั้งสัดส่วนรากและคาร์บอนให้">
+            <Select label="สมการแอลโลเมตรี" value={t.equation} options={Object.entries(ALLOMETRIC).map(([k, v]) => [k, `${v.label} (${v.source})`])}
+              onChange={(v) => upd((x) => { x.equation = v; x.rootRatio = eqOf(v).root; x.carbonFraction = eqOf(v).cf; })} />
+          </Q>
           <Q title="แปลงที่วัด" help="แปลงมาตรฐาน 40 × 40 ม. = 1 ไร่ ถ้าวัดทุกต้นในแปลง ให้ใส่พื้นที่ทั้งแปลง">
             <div className="grid2">
               <Num label="พื้นที่แปลงที่วัด" unit="ไร่" value={t.plotAreaRai} onChange={(v) => upd((x) => { x.plotAreaRai = v; })} />
@@ -501,11 +506,10 @@ export function TreeStep({ t, upd }: { t: TreeInventory; upd: (fn: (t: TreeInven
             {hasOld && <div style={{ marginTop: "0.5rem" }}><TreeRows rows={t.baseline} which="baseline" upd={upd} eq={t.equation} /></div>}
           </Q>
           <details className="more">
-            <summary>ตั้งค่าสมการ (สำหรับผู้เชี่ยวชาญ)</summary>
+            <summary>สัดส่วนรากและคาร์บอน (สำหรับผู้เชี่ยวชาญ)</summary>
             <div className="grid2" style={{ marginTop: "0.75rem" }}>
-              <Select label="สมการแอลโลเมตรี" value={t.equation} options={Object.entries(ALLOMETRIC).map(([k, v]) => [k, `${v.label} (${v.source})`])} onChange={(v) => upd((x) => { x.equation = v; })} />
               <Select<RootKey> label="สัดส่วนราก/ลำต้น" value={t.rootRatio} options={Object.entries(ROOT_RATIOS).map(([k, v]) => [k as RootKey, `${v.label}: ${v.value}`])} onChange={(v) => upd((x) => { x.rootRatio = v; })} />
-              <Num label="สัดส่วนคาร์บอน (CF)" value={t.carbonFraction} onChange={(v) => upd((x) => { x.carbonFraction = v; })} hint="ค่าเริ่มต้น IPCC 0.47" />
+              <Num label="สัดส่วนคาร์บอน (CF)" value={t.carbonFraction} onChange={(v) => upd((x) => { x.carbonFraction = v; })} hint="อบก.: ทั่วไป 0.47 โกงกาง 0.4715 ปาล์ม 0.413" />
             </div>
           </details>
         </>
